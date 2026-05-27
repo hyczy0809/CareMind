@@ -3,9 +3,7 @@
 **/.adk/
 .venv/
 __pycache__/
-md/*
-!md/
-!md/大纲.md
+md/
 Multi-Agent-System-for-SSE-Composite-Index-Prediction-main/
 
 *.py[cod]
