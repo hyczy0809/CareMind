@@ -3,11 +3,14 @@
 **/.adk/
 .venv/
 __pycache__/
-md/
+md/*
+!md/
+!md/大纲.md
 Multi-Agent-System-for-SSE-Composite-Index-Prediction-main/
 
 *.py[cod]
 *.db
+my_agent/care_state.json
 .DS_Store
 *.log
 *.sqlite3
