@@ -1,0 +1,19 @@
+# Web framework
+fastapi
+uvicorn
+
+# Core dependencies
+google-adk
+pymysql
+pandas
+loguru
+python-dotenv
+
+# RAGFlow SDK
+ragflow-sdk
+
+# HTTP
+requests
+PyGithub
+httpx
+PyYAML
