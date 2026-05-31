@@ -4,6 +4,19 @@ from typing import Any
 
 from .care_state import care_state
 
+# Memory 模块（懒加载，避免循环依赖）
+def _mem_tools():
+    from . import memory_tools
+    return memory_tools
+
+def _mem_router():
+    from . import memory_router
+    return memory_router
+
+def _mem_policy():
+    from . import memory_policy
+    return memory_policy
+
 
 SEVERITY_SCORE = {"low": 1, "medium": 2, "high": 3}
 
@@ -413,16 +426,133 @@ def run_cloud_care_workflow(
     patient_id: str = "demo_patient",
     caregiver_id: str = "demo_caregiver",
 ) -> dict[str, Any]:
-    """Run the cloud-side multi-agent workflow through deterministic tools."""
+    """
+    CareMind Memory 增强云侧工作流（对应 CareMind_Memory.md 第 8.2 节）：
+
+    Step 1.  事件抽取 — extract_care_signals
+    Step 2.  Memory 写入（自动）— update_event_memory
+    Step 3.  Memory Router — 决定检索哪些 Memory
+    Step 4.  执行 Memory 检索 — patient_profile / behavior_baseline / medication / recent_events
+    Step 5.  专业知识检索 — retrieve_professional_knowledge
+    Step 6.  患者风险评估 — assess_patient_risk（结果附带 memory_context）
+    Step 7.  照护者压力评估 — assess_caregiver_burden
+    Step 8.  照护计划生成 — create_care_plan
+    Step 9.  更新照护者状态 Memory — update_caregiver_state
+    Step 10. 提出长期 Memory 候选 + 门控分类 — propose_memory_update
+    Step 11. 复诊摘要生成 — generate_doctor_summary
+    """
+    mt = _mem_tools()
+    mr = _mem_router()
+    mp = _mem_policy()
+
+    # ── Step 1: 事件抽取 ────────────────────────────────
     extracted = log_extracted_events(note, patient_id, caregiver_id)
+    raw_events = extracted.get("saved_events", [])
+
+    # ── Step 2: 自动写入 Episodic Memory ────────────────
+    auto_events = [ev for ev in raw_events if mp.should_auto_write(ev)]
+    event_write_result = mt.update_event_memory(
+        patient_id=patient_id,
+        extracted_events=auto_events,
+    )
+
+    # ── Step 3: Memory Router 路由 ───────────────────────
+    route_plan = mr.route_memory_requests(raw_events)
+
+    # ── Step 4: 执行 Memory 检索 ─────────────────────────
+    memory_context = mr.execute_memory_retrieval(
+        patient_id=patient_id,
+        caregiver_id=caregiver_id,
+        route_plan=route_plan,
+    )
+
+    # ── Step 5: 患者风险评估（结果注入 memory_context 摘要）───
     patient_risk = assess_patient_risk(patient_id)
+    # 将近期趋势注入风险卡片，供后续 Agent 使用
+    patient_risk["memory_context_summary"] = {
+        "recent_event_counts": memory_context.get("recent_events", {}).get(
+            "event_type_counts", {}
+        ),
+        "behavior_baselines_found": list(
+            memory_context.get("behavior_baseline", {})
+            .get("matched_baselines", {})
+            .keys()
+        ),
+        "medication_refusal_7d": memory_context.get("medication_memory", {}).get(
+            "recent_refusal_count_7d", 0
+        ),
+    }
+
+    # ── Step 6: 照护者压力评估 ────────────────────────────
     caregiver_support = assess_caregiver_burden(caregiver_id, patient_id)
-    plan = create_care_plan(patient_id)
-    summary = generate_doctor_summary(patient_id, "recent", True)
+
+    # ── Step 7: 照护计划生成（计划文本注入个性化 Memory 提示）───
+    care_plan = create_care_plan(patient_id)
+    # 将行为基线中的有效话术追加到计划 priorities
+    matched_baselines = (
+        memory_context.get("behavior_baseline", {}).get("matched_baselines", {})
+    )
+    for btype, bentry in matched_baselines.items():
+        eff = bentry.get("effective_interventions", [])
+        if eff:
+            hint = f"[{bentry.get('behavior_type', btype)} 历史有效方式] " + "；".join(eff[:3])
+            care_plan.setdefault("memory_enriched_hints", []).append(hint)
+    # 注入专业知识摘要
+    prof_knowledge = memory_context.get("professional_knowledge", [])
+    if prof_knowledge:
+        care_plan["professional_knowledge_applied"] = [
+            k["topic"] for k in prof_knowledge
+        ]
+
+    # ── Step 8: 更新照护者状态 Memory ────────────────────
+    caregiver_update = mt.update_caregiver_state(
+        caregiver_id=caregiver_id,
+        caregiver_signals=caregiver_support,
+    )
+
+    # ── Step 9: 提出长期 Memory 候选 + 门控分类 ────────────
+    candidates = mt.propose_memory_update(
+        patient_id=patient_id,
+        extracted_events=raw_events,
+        care_plan=care_plan,
+    )
+    classified = mp.classify_memory_candidates(candidates)
+
+    # 自动写入照护者状态类候选（auto_confirm=True）
+    for item in classified.get("auto_write", []):
+        if item.get("memory_type") == "caregiver_state":
+            pass  # 已在 Step 8 更新
+
+    # 生成用户确认提示语
+    confirmation_prompt = mp.build_confirmation_prompt(
+        classified.get("needs_confirmation", [])
+    )
+
+    # ── Step 10: 复诊摘要 ──────────────────────────────────
+    doctor_summary = generate_doctor_summary(patient_id, "recent", True)
+
     return {
+        # 事件抽取
         "extracted": extracted,
+        # Memory 相关
+        "memory_context": {
+            "route_plan": route_plan,
+            "patient_profile": memory_context.get("patient_profile"),
+            "medication_memory": memory_context.get("medication_memory"),
+            "behavior_baseline": memory_context.get("behavior_baseline"),
+            "recent_events": memory_context.get("recent_events"),
+            "caregiver_state": memory_context.get("caregiver_state"),
+        },
+        "professional_knowledge": prof_knowledge,
+        # 各 Agent 输出
         "patient_risk": patient_risk,
         "caregiver_support": caregiver_support,
-        "care_plan": plan,
-        "doctor_summary": summary,
+        "care_plan": care_plan,
+        # Memory 更新
+        "event_memory_write": event_write_result,
+        "caregiver_memory_update": caregiver_update,
+        "memory_update_candidates": classified,
+        "memory_confirmation_prompt": confirmation_prompt,
+        # 复诊摘要
+        "doctor_summary": doctor_summary,
     }

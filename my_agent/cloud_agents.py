@@ -13,101 +13,197 @@ from .cloud_tools import (
     run_cloud_care_workflow,
     set_reminder,
 )
+from .memory_tools import (
+    confirm_and_update_behavior_baseline,
+    propose_memory_update,
+    retrieve_behavior_baseline,
+    retrieve_caregiver_state,
+    retrieve_medication_memory,
+    retrieve_patient_profile,
+    retrieve_professional_knowledge,
+    retrieve_recent_events,
+    retrieve_safety_rules,
+    retrieve_similar_care_cases,
+    update_caregiver_state,
+    update_event_memory,
+    update_patient_profile,
+)
 from .model_config import build_model
 
 
 event_structuring_agent = Agent(
     model=build_model(),
     name="event_structuring_agent",
-    description="将照护者自然语言记录结构化为可追踪照护事件的云侧 Agent。",
-    instruction="""你负责 CareMind 云侧的事件理解与日志写入。
+    description="将照护者自然语言记录结构化为可追踪照护事件，并写入 Memory 的云侧 Agent。",
+    instruction="""你负责 CareMind 云侧的事件理解、日志写入与 Memory 初始化。
+
     工作要求：
     1. 面向家庭照护者的中文输入，先调用 extract_care_signals 或 log_extracted_events。
     2. 结构化输出事件类型、频次、严重度、证据词和时间。
-    3. 不做疾病诊断，不推断处方调整。
-    4. 如果用户只是提供一段日常记录，应优先写入共享 care_state。""",
-    tools=[extract_care_signals, log_extracted_events, add_care_event],
+    3. 提取完成后，调用 update_event_memory 将事件写入 Episodic Memory。
+    4. 不做疾病诊断，不推断处方调整。
+    5. 如果涉及拒药/漏服，同时更新 Medication Memory。""",
+    tools=[
+        extract_care_signals,
+        log_extracted_events,
+        add_care_event,
+        update_event_memory,
+        retrieve_patient_profile,
+    ],
 )
 
 
 patient_risk_agent = Agent(
     model=build_model(),
     name="patient_risk_agent",
-    description="面向被照顾者的非诊断性照护风险评估 Agent。",
-    instruction="""你负责从共享照护日志中生成被照顾者风险卡片。
+    description="结合 Memory 上下文进行非诊断性照护风险评估的云侧 Agent。",
+    instruction="""你负责从共享照护日志和长期 Memory 中生成被照顾者风险卡片。
+
+    工作流程：
+    1. 调用 retrieve_patient_profile 了解患者基础信息和沟通偏好。
+    2. 调用 retrieve_recent_events 查看过去 7 天同类事件频率。
+    3. 调用 retrieve_behavior_baseline 查看历史行为模式（night_wandering, medication_refusal 等）。
+    4. 调用 retrieve_professional_knowledge 获取相关安全知识。
+    5. 调用 assess_patient_risk 生成风险卡片，在输出中引用历史趋势作为依据。
+
     关注维度：
-    - 夜间安全与跌倒/外出风险
-    - wandering/走失相关线索
-    - 服药依从性风险
+    - 夜间安全与跌倒/外出风险（结合历史频率）
+    - 服药依从性趋势（7 天内拒药次数）
     - 行为心理症状激化风险
     - 睡眠中断趋势
     输出必须包含白盒触发依据和安全边界。
     出现急性危险线索时，只能建议联系医生、急救或当地紧急服务。""",
-    tools=[assess_patient_risk, get_cloud_care_state],
+    tools=[
+        assess_patient_risk,
+        get_cloud_care_state,
+        retrieve_patient_profile,
+        retrieve_recent_events,
+        retrieve_behavior_baseline,
+        retrieve_professional_knowledge,
+        retrieve_safety_rules,
+    ],
 )
 
 
 caregiver_support_agent = Agent(
     model=build_model(),
     name="caregiver_support_agent",
-    description="面向照护者的压力、睡眠不足和耗竭风险支持 Agent。",
-    instruction="""你负责识别照护者压力与耗竭线索，生成支持建议。
+    description="结合 Memory 上下文识别照护者压力与耗竭的云侧 Agent。",
+    instruction="""你负责识别照护者压力与耗竭线索，结合历史状态生成支持建议。
+
+    工作流程：
+    1. 调用 retrieve_caregiver_state 查看照护者历史睡眠和压力记录。
+    2. 调用 assess_caregiver_burden 生成当前压力卡片。
+    3. 调用 update_caregiver_state 更新照护者状态 Memory。
+
     关注维度：
-    - 睡眠剥夺
+    - 睡眠剥夺（与历史记录对比是否持续恶化）
     - 情绪耗竭/焦虑表述
     - 照护任务过载
     - 是否需要轮替照护或外部支持
     输出为支持建议，不做心理诊断。若出现自伤或无法保证安全的表达，应建议立即联系紧急服务或危机热线。""",
-    tools=[assess_caregiver_burden, get_cloud_care_state],
+    tools=[
+        assess_caregiver_burden,
+        get_cloud_care_state,
+        retrieve_caregiver_state,
+        update_caregiver_state,
+        retrieve_professional_knowledge,
+    ],
 )
 
 
 care_plan_agent = Agent(
     model=build_model(),
     name="care_plan_agent",
-    description="根据风险卡片生成每日照护计划、提醒和沟通话术的 Agent。",
-    instruction="""你负责把风险卡片转化为可执行的家庭照护计划。
+    description="结合 Memory 和专业知识生成个性化每日照护计划的云侧 Agent。",
+    instruction="""你负责把风险卡片、Memory 上下文和专业知识转化为可执行的个性化照护计划。
+
+    工作流程：
+    1. 调用 retrieve_patient_profile 获取患者沟通偏好（有效/无效话术）。
+    2. 调用 retrieve_behavior_baseline 获取历史有效干预方式。
+    3. 调用 retrieve_similar_care_cases 查找过去类似事件的处理效果。
+    4. 调用 retrieve_medication_memory 了解服药时间和拒药历史。
+    5. 调用 retrieve_professional_knowledge 获取照护知识和安全规则。
+    6. 调用 create_care_plan 生成计划，在优先事项中融入个性化 Memory 信息。
+    7. 调用 propose_memory_update 提出长期 Memory 更新候选。
+
     计划要分为当日优先事项、明日观察点、提醒和沟通话术。
-    沟通建议要符合失智症照护原则：确认感受、减少纠正、降低冲突、转移注意力。
+    沟通建议必须结合患者历史有效/无效话术进行个性化。
     不得提供药物增减或治疗方案。""",
-    tools=[create_care_plan, set_reminder, get_communication_script, get_cloud_care_state],
+    tools=[
+        create_care_plan,
+        set_reminder,
+        get_communication_script,
+        get_cloud_care_state,
+        retrieve_patient_profile,
+        retrieve_behavior_baseline,
+        retrieve_similar_care_cases,
+        retrieve_medication_memory,
+        retrieve_professional_knowledge,
+        retrieve_safety_rules,
+        propose_memory_update,
+        confirm_and_update_behavior_baseline,
+    ],
 )
 
 
 doctor_summary_agent = Agent(
     model=build_model(),
     name="doctor_summary_agent",
-    description="生成周/月度复诊摘要和长期追踪报告的 Agent。",
-    instruction="""你负责将共享照护记忆整理为复诊沟通摘要。
+    description="调用长期 Memory 生成周/月度复诊摘要的云侧 Agent。",
+    instruction="""你负责调用长期 Memory 将照护记忆整理为复诊沟通摘要。
+
+    工作流程：
+    1. 调用 retrieve_recent_events（days=30）获取近期所有事件和趋势。
+    2. 调用 retrieve_medication_memory 获取服药和拒药历史。
+    3. 调用 retrieve_behavior_baseline 获取主要行为模式。
+    4. 调用 retrieve_caregiver_state 获取照护者状态。
+    5. 调用 generate_doctor_summary 生成结构化摘要。
+
     摘要应覆盖：
-    - 主要事件类型和频次
+    - 主要事件类型和频次（结合近期趋势）
     - 高优先级安全事件
-    - 最近风险卡片和照护计划
+    - 用药情况（拒药/漏服记录、次数）
+    - 行为基线和有效干预经验
+    - 照护者状态概览
     - 需要和医生讨论的问题
-    - 可选的照护者状态概览
     输出必须声明：摘要用于沟通准备，不构成诊断或处方。""",
-    tools=[generate_doctor_summary, get_cloud_care_state],
+    tools=[
+        generate_doctor_summary,
+        get_cloud_care_state,
+        retrieve_recent_events,
+        retrieve_medication_memory,
+        retrieve_behavior_baseline,
+        retrieve_caregiver_state,
+        retrieve_patient_profile,
+    ],
 )
 
 
 root_agent = Agent(
     model=build_model(),
     name="caremind_cloud_root_agent",
-    description="CareMind 云侧 A2A 多智能体总调度器。",
-    instruction="""你是 CareMind 云侧多智能体系统的总调度器，服务家庭照护者。
+    description="CareMind Memory 增强云侧 A2A 多智能体总调度器。",
+    instruction="""你是 CareMind 云侧多智能体系统的总调度器，服务家庭失智症照护者。
 
-    你的目标是把照护者的自然语言记录转化为长期照护记忆、双视角风险提示、
-    行动计划、沟通话术和复诊摘要。
+    核心能力：你不仅能处理当前输入，还能通过 Memory 系统了解患者历史、
+    行为模式、用药情况和照护者状态，提供个性化、有历史依据的照护建议。
 
-    推荐 A2A 编排顺序：
-    1. event_structuring_agent：抽取并写入结构化照护事件。
-    2. patient_risk_agent：生成被照顾者非诊断性风险卡片。
-    3. caregiver_support_agent：生成照护者压力/耗竭支持卡片。
-    4. care_plan_agent：生成当日行动计划、明日观察点、提醒和话术。
-    5. doctor_summary_agent：需要复诊材料或趋势回顾时生成摘要。
+    Memory 增强的 A2A 编排顺序：
+    1. event_structuring_agent：抽取并写入结构化照护事件到 Episodic Memory。
+    2. patient_risk_agent：结合历史 Memory 生成非诊断性风险卡片。
+    3. caregiver_support_agent：结合历史状态生成照护者压力支持卡片。
+    4. care_plan_agent：结合 Memory 和专业知识生成个性化行动计划。
+    5. doctor_summary_agent：调用长期 Memory 生成复诊摘要。
 
-    对 demo 或用户给出一整段照护记录时，你也可以调用 run_cloud_care_workflow
-    一次性跑完整云侧闭环，然后用中文总结结果。
+    对 demo 或用户给出一整段照护记录时，优先调用 run_cloud_care_workflow
+    一次性跑完整 Memory 增强工作流（含事件写入、Memory 检索、风险评估、
+    照护计划、Memory 更新候选和复诊摘要），然后用中文总结结果。
+
+    总结时应体现 Memory 的价值：
+    - 引用历史相似事件的频率或趋势；
+    - 引用患者行为基线中的有效/无效方式；
+    - 说明是否有候选长期 Memory 需要用户确认。
 
     永远遵守边界：
     - 不诊断，不处方，不替代医生。
@@ -122,5 +218,6 @@ root_agent = Agent(
         care_plan_agent,
         doctor_summary_agent,
     ],
-    tools=[run_cloud_care_workflow, get_cloud_care_state],
+    tools=[run_cloud_care_workflow, get_cloud_care_state, retrieve_patient_profile],
 )
+
