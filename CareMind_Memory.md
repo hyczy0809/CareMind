@@ -298,6 +298,159 @@ caremind_cloud_root_agent
 }
 ```
 
+### 5.6b 外部 MCP 知识源集成（DrugBank 示例）
+
+CareMind 云侧内置知识（KNOWLEDGE_DB）仅覆盖失智症照护通用原则，无法动态回答药物相关问题（如"当前服用的药物有什么副作用？""多种药物之间有相互作用吗？""有没有替代药物的注意事项？"）。
+
+为此引入 **MCP（Model Context Protocol）外部知识源集成层**，将权威医疗数据库（如 DrugBank）作为可插拔的实时知识源。
+
+#### 架构
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                 CareMind Cloud Agents                    │
+│  event_structuring → patient_risk → care_plan → summary │
+└────────────────────┬────────────────────────────────────┘
+                     │ retrieve_enriched_knowledge()
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│              Memory Knowledge Layer                       │
+│  ┌──────────────────┐  ┌──────────────────────────────┐ │
+│  │  KNOWLEDGE_DB    │  │  MCPKnowledgeHub (外部)     │ │
+│  │  (内置静态知识)    │  │  ┌────────────────────────┐ │ │
+│  │                  │  │  │ DrugBank MCP            │ │ │
+│  │  · 夜间安全      │  │  │  · drug_search          │ │ │
+│  │  · 沟通原则      │  │  │  · drug_interactions    │ │ │
+│  │  · 拒药沟通      │  │  │  · drug_details         │ │ │
+│  │  · 照护者负担    │  │  └────────────────────────┘ │ │
+│  │  · 激越管理      │  │  ┌────────────────────────┐ │ │
+│  │  · 安全边界      │  │  │ PubChem (预留)          │ │ │
+│  │  · 急症规则      │  │  │ OpenFDA (预留)          │ │ │
+│  └──────────────────┘  │  └────────────────────────┘ │ │
+│                        └──────────────────────────────┘ │
+│           merge_knowledge(builtin, external)              │
+│           · 内置 → source_type="inline"                  │
+│           · MCP   → source_type="mcp"                    │
+│           · 同 knowledge_id 外部优先覆盖                  │
+└─────────────────────────────────────────────────────────┘
+                     ▲
+                     │ MCP JSON-RPC over HTTPS
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│              DrugBank MCP Server                          │
+│         https://mcp.drugbank.com/mcp                      │
+│  Authorization: Bearer $DRUGBANK_API_KEY                  │
+│                                                          │
+│  tools/call: {                                           │
+│    "name": "drug_search",                                │
+│    "arguments": {"query": "donepezil"}                   │
+│  }                                                       │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### 数据流
+
+```text
+照护者输入："妈妈今晚又不肯吃多奈哌齐"
+    │
+    ▼
+event_structuring_agent
+    抽取 event_type = "medication_refusal"
+    │
+    ▼
+memory_router.route_memory_requests()
+    发现 medication_refusal → 触发 extract_drug_names = True
+    路由 mcp_knowledge_topics → ["medication", "medication_refusal"]
+    │
+    ▼
+execute_memory_retrieval()
+    │
+    ├── 内置知识：retrieve_professional_knowledge(["medication_refusal"])
+    │   → {"content": "拒药时不应强迫或自行补药..."}
+    │
+    └── MCP 外部知识：retrieve_enriched_knowledge(topic, drug_names=["多奈哌齐"])
+        │
+        └── MCPKnowledgeHub.query("drugbank", "drug_search", {"query": "多奈哌齐"})
+            │
+            POST https://mcp.drugbank.com/mcp
+            { "jsonrpc": "2.0", "method": "tools/call",
+              "params": {"name": "drug_search", "arguments": {"query": "donepezil"}} }
+            │
+            ← 200 OK  { "result": {"content": [{
+                "type": "text",
+                "text": "{"name":"多奈哌齐","indication":"阿尔兹海默病",
+                         "mechanism_of_action":"乙酰胆碱酯酶抑制剂",
+                         "side_effects":"恶心、腹泻、失眠..."}"
+              }]}}
+            │
+            ▼
+        → ExternalKnowledgeResult(
+            source="DrugBank MCP",
+            content="药品名称：多奈哌齐\n适应症：阿尔兹海默病\n...",
+            confidence="high"
+          )
+    │
+    ▼
+merge_knowledge(builtin, mcp_results)
+    → patient_risk_agent    (结合外部药学知识评估风险)
+    → care_plan_agent       (生成含药物注意的照护计划)
+```
+
+#### 路由规则
+
+| 事件类型 | 内置知识主题 | MCP 外部知识主题 | 是否需要提取药名 |
+|---|---|---|---|
+| `medication_refusal` | `medication_refusal`, `medication` | `medication`, `medication_refusal` | ✅ |
+| `general_note` | 按内容匹配 | — | — |
+| 其他 | 按规则匹配 | — | — |
+
+#### 缓存与降级
+
+```
+MCP 查询流程：
+  1. 检查本地缓存（TTL 1 小时）
+     → 命中 → 直接返回
+     → 未命中 ↓
+  2. POST DrugBank MCP（最多重试 2 次）
+     → 200 OK → 解析结果，写入缓存
+     → 401/403 → 静默跳过（不阻断流程）
+     → 500+ / Timeout → 重试后仍失败 → 静默降级
+  3. 仅使用内置 KNOWLEDGE_DB 继续
+```
+
+#### 配置
+
+在 `.env` 中添加：
+
+```bash
+# DrugBank MCP（可选，未配置时不影响内置知识使用）
+DRUGBANK_API_KEY=your_drugbank_api_key_here
+```
+
+新 MCP 源可通过 `mcp_knowledge_client.py` 的 `MCP_SOURCE_REGISTRY` 热插拔注册。
+
+#### 与内置知识的协作模式
+
+| 场景 | 内置知识 | MCP 外部知识 | 合并策略 |
+|---|---|---|---|
+| 拒药沟通 | 通用沟通原则 | 该药的具体副作用/注意事项 | MCP 提供专业细节，内置提供照护框架 |
+| 多药同时服用 | — | 药物相互作用数据 | MCP 独力回答 |
+| 新药信息不明 | — | 药物详细信息 | MCP 独力回答 |
+| 夜间安全 | 门锁/照明/障碍物建议 | — | 内置独力回答 |
+
+#### 安全边界
+
+```
+MCP 外部知识使用约束：
+✓ 可引用药物适应症、副作用、相互作用作为照护参考
+✓ 结果标注来源（"数据来自 DrugBank，仅供参考"）
+✗ 不可用外部知识代替医嘱
+✗ 不可用外部知识建议换药或停药
+✗ 不可用外部知识做出"更安全""更适合"等判断
+```
+
+即：MCP 知识是"照护者信息补充"而非"医疗决策依据"。
+
 ---
 
 ## 6. 现有 Agent 中如何调用 Memory

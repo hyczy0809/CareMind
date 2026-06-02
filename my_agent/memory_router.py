@@ -2,6 +2,11 @@
 CareMind Memory Router
 根据当前照护事件类型，决定需要读取哪些 Memory，避免冗余调用。
 对应 CareMind_Memory.md 第 9 节设计。
+
+MCP 知识路由：
+  当事件涉及药物相关话题（medication_refusal、polypharmacy 等）时，
+  路由计划中会附加 mcp_knowledge_topics，由 execute_memory_retrieval
+  调用 MCPKnowledgeHub 查询外部药学数据库（如 DrugBank）。
 """
 from typing import Any
 
@@ -18,7 +23,8 @@ _EVENT_TO_MEMORY_RULES: dict[str, dict[str, Any]] = {
     },
     "medication_refusal": {
         "medication_memory": True,
-        "professional_topics": ["medication_refusal"],
+        "professional_topics": ["medication_refusal", "medication", "adverse_effects"],
+        "mcp_knowledge_topics": ["medication", "medication_refusal"],  # ← 路由到 MCP
     },
     "night_wandering": {
         "behavior_baseline": True,
@@ -60,6 +66,8 @@ def route_memory_requests(
       "retrieve_caregiver_state": bool,
       "behavior_baseline_types": [...],        # 需要读取的行为基线类型
       "professional_knowledge_topics": [...],  # 需要检索的专业知识主题
+      "mcp_knowledge_topics": [...],           # 新增：MCP 外部知识主题
+      "extract_drug_names": bool,              # 新增：是否需从用药记忆中提取药名
     }
     """
     event_types = {ev.get("event_type", "") for ev in extracted_events}
@@ -71,6 +79,8 @@ def route_memory_requests(
         "retrieve_caregiver_state": False,
         "behavior_baseline_types": [],
         "professional_knowledge_topics": [],
+        "mcp_knowledge_topics": [],         # 新增
+        "extract_drug_names": False,        # 新增
         "detected_event_types": list(event_types),
     }
 
@@ -86,6 +96,11 @@ def route_memory_requests(
         for topic in rule.get("professional_topics", []):
             if topic not in plan["professional_knowledge_topics"]:
                 plan["professional_knowledge_topics"].append(topic)
+        # MCP 外部知识路由
+        for mtopic in rule.get("mcp_knowledge_topics", []):
+            if mtopic not in plan["mcp_knowledge_topics"]:
+                plan["mcp_knowledge_topics"].append(mtopic)
+                plan["extract_drug_names"] = True
 
     # 安全知识始终附加
     for always in ["safety_boundary", "emergency_rules"]:
@@ -102,7 +117,14 @@ def execute_memory_retrieval(
 ) -> dict[str, Any]:
     """
     根据路由计划实际执行 Memory 检索，返回汇聚后的上下文字典。
-    调用 memory_tools 中的 retrieve_* 函数。
+
+    Memory 知识层级：
+    1. 端侧 Memory（patient_profile, medication_memory, behavior_baseline 等）
+    2. 内置专业知识（KNOWLEDGE_DB）
+    3. 外部 MCP 知识（DrugBank 等，按需异步查询）← 新增
+
+    当 route_plan["extract_drug_names"] == True 时，
+    从 medication_memory 中提取当前用药名，查询外部 MCP 源。
     """
     from .memory_tools import (
         retrieve_behavior_baseline,
@@ -111,6 +133,8 @@ def execute_memory_retrieval(
         retrieve_patient_profile,
         retrieve_professional_knowledge,
         retrieve_recent_events,
+        retrieve_enriched_knowledge,       # 新增：内置 + 外部混合
+        query_external_knowledge,          # 新增：纯外部查询
     )
 
     context: dict[str, Any] = {}
@@ -133,8 +157,34 @@ def execute_memory_retrieval(
             patient_id, event_types=baseline_types
         )
 
+    # ── 专业知识检索（内置 + 外部 MCP）──
     topics = route_plan.get("professional_knowledge_topics", [])
-    if topics:
+    mcp_topics = route_plan.get("mcp_knowledge_topics", [])
+    should_query_mcp = route_plan.get("extract_drug_names", False)
+
+    if topics and should_query_mcp:
+        # 提取当前用药名，作为 MCP 查询关键词
+        med_mem = context.get("medication_memory", {})
+        current_meds = med_mem.get("current_medications", [])
+        drug_names = [m.get("name", "") for m in current_meds if m.get("name")]
+
+        # 增强检索：内置 + 外部混合
+        all_topics = list(set(topics + mcp_topics))
+        context["professional_knowledge"] = retrieve_enriched_knowledge(
+            topics=all_topics,
+            drug_names=drug_names,
+        )
+
+        # 附加 MCP 源摘要（用于 Agent 输出可解释性）
+        mcp_info = query_external_knowledge(topics=mcp_topics, drug_names=drug_names)
+        context["mcp_knowledge_summary"] = {
+            "available_sources": mcp_info.get("source_summary", {}).get("available_sources", []),
+            "drug_info_count": len(mcp_info.get("drug_info", [])),
+            "interactions_count": len(mcp_info.get("interactions", [])),
+            "errors": mcp_info.get("errors", []),
+        }
+    elif topics:
+        # 无 MCP 查询需求时，仅使用内置知识
         context["professional_knowledge"] = retrieve_professional_knowledge(topics)
 
     return context

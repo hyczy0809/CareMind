@@ -2,6 +2,13 @@
 CareMind Memory Schema
 定义所有 Memory 数据结构的默认模板与工厂函数。
 遵循 CareMind_Memory.md 第 5 节设计。
+
+Memory 知识体系分层：
+  内置知识（KNOWLEDGE_DB）── 失智症照护通用知识（硬编码，始终可用）
+  外部知识（MCP 源）    ── DrugBank / PubMed / OpenFDA 等专业医疗数据源
+                          ── 动态查询，按需缓存，静默降级
+
+外部知识源配置在 mcp_knowledge_client.py 的 MCP_SOURCE_REGISTRY 中统一管理。
 """
 from datetime import datetime
 from typing import Any
@@ -210,6 +217,74 @@ KNOWLEDGE_DB: list[dict[str, Any]] = [
         "safety_boundary": ["立即联系急救"],
     },
 ]
+
+# ─────────────────────────────────────────────
+# 5.6b 外部知识源集成（MCP 知识）
+# ─────────────────────────────────────────────
+
+class KnowledgeSource:
+    """单个知识源的元数据"""
+    INLINE = "inline"       # 内置 KNOWLEDGE_DB
+    MCP = "mcp"             # 外部 MCP 源
+    RAG = "rag"             # 预留：向量检索
+
+
+def knowledge_entry_from_mcp(
+    ext_result: Any,  # ExternalKnowledgeResult（避免循环导入）
+) -> dict[str, Any]:
+    """将外部 MCP 结果转换为与 KNOWLEDGE_DB 兼容的 dict"""
+    return {
+        "knowledge_id": getattr(ext_result, "knowledge_id", ""),
+        "topic": getattr(ext_result, "topic", ""),
+        "source": getattr(ext_result, "source", "external_mcp"),
+        "source_type": KnowledgeSource.MCP,
+        "content": getattr(ext_result, "content", ""),
+        "applicable_when": getattr(ext_result, "applicable_when", []),
+        "safety_boundary": getattr(ext_result, "safety_boundary", []),
+        "fetched_at": getattr(ext_result, "fetched_at", ""),
+        "confidence": getattr(ext_result, "confidence", "medium"),
+    }
+
+
+def merge_knowledge(
+    builtin: list[dict[str, Any]],
+    external: list[dict[str, Any]],
+    topic_filter: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    混合检索：合并内置 + 外部知识，按 topic 去重（外部优先覆盖内置）。
+
+    返回时内置条目标注 source_type = "inline"，
+    外部条目标注 source_type = "mcp"。
+    """
+    merged: dict[str, dict[str, Any]] = {}
+
+    # 先放入内置知识
+    for entry in builtin:
+        tid = entry.get("knowledge_id", "")
+        entry_copy = dict(entry)
+        entry_copy.setdefault("source_type", KnowledgeSource.INLINE)
+        merged[tid] = entry_copy
+
+    # 外部知识覆盖同 knowledge_id 的内置条目
+    for entry in external:
+        tid = entry.get("knowledge_id", "")
+        entry_copy = dict(entry)
+        entry_copy.setdefault("source_type", KnowledgeSource.MCP)
+        merged[tid] = entry_copy
+
+    results = list(merged.values())
+
+    # topic 过滤
+    if topic_filter:
+        results = [
+            r for r in results
+            if r.get("topic") in topic_filter
+            or any(t for t in r.get("applicable_when", []) if t in topic_filter)
+        ]
+
+    return results
+
 
 # ─────────────────────────────────────────────
 # 5.7 Safety Memory（固定规则，不可修改）

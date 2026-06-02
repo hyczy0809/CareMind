@@ -79,9 +79,10 @@ care note
     ├── cloudflare_openai_model.py
     ├── memory_schema.py           # Memory data structures & built-in knowledge
     ├── memory_state.py            # JSON read/write for memory_store/
-    ├── memory_tools.py            # retrieve_* / update_* tool functions
-    ├── memory_router.py           # Event-based Memory request routing
+    ├── memory_tools.py            # retrieve_* / update_* / MCP-enriched tool functions
+    ├── memory_router.py           # Event-based Memory request routing + MCP topics
     ├── memory_policy.py           # Write-gate policy (auto / confirm / block)
+    ├── mcp_knowledge_client.py    # Pluggable MCP external knowledge client
     └── memory_store/
         ├── patient_profile.json
         ├── medication_memory.json
@@ -115,6 +116,9 @@ CF_AIG_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat
 MODEL_NAME=google-ai-studio/gemini-2.5-flash
 PROMPT_MODE=WEAK
 PORT=8080
+
+# Optional: DrugBank MCP for real-time drug knowledge (omit to use built-in only)
+DRUGBANK_API_KEY=your_drugbank_api_key_here
 ```
 
 Start the ADK Web UI (recommended for interactive testing):
@@ -224,16 +228,153 @@ all writes pass through `memory_policy.py`:
 - **Blocked** — any candidate flagged as a diagnostic conclusion or medication
   recommendation is rejected.
 
+### External Knowledge via MCP (Model Context Protocol)
+
+The built-in `KNOWLEDGE_DB` covers general dementia care principles but cannot
+answer dynamic drug-specific questions such as: *"What are the side-effects of
+this medication?"* or *"Are there interactions between these two drugs?"*
+
+CareMind introduces a **pluggable MCP knowledge layer** that integrates
+authoritative medical databases (e.g. DrugBank) as hot-swappable real-time
+knowledge sources.
+
+#### Architecture
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                 CareMind Cloud Agents                    │
+│  event_structuring → patient_risk → care_plan → summary │
+└────────────────────┬────────────────────────────────────┘
+                     │ retrieve_enriched_knowledge()
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│              Memory Knowledge Layer                      │
+│  ┌──────────────────┐  ┌──────────────────────────────┐ │
+│  │  KNOWLEDGE_DB    │  │  MCPKnowledgeHub (external)  │ │
+│  │  (built-in)      │  │  ┌────────────────────────┐  │ │
+│  │  · Night safety  │  │  │ DrugBank MCP           │  │ │
+│  │  · Communication │  │  │  · drug_search         │  │ │
+│  │  · Med refusal   │  │  │  · drug_interactions   │  │ │
+│  │  · Carer burden  │  │  │  · drug_details        │  │ │
+│  │  · Safety rules  │  │  └────────────────────────┘  │ │
+│  └──────────────────┘  │  ┌────────────────────────┐  │ │
+│                        │  │ PubChem  (reserved)    │  │ │
+│                        │  │ OpenFDA  (reserved)    │  │ │
+│                        │  └────────────────────────┘  │ │
+│                        └──────────────────────────────┘ │
+│           merge_knowledge(builtin, external)             │
+│           · built-in → source_type = "inline"            │
+│           · MCP      → source_type = "mcp"               │
+│           · same knowledge_id: external overrides inline │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### Event-Triggered Data Flow
+
+```text
+Carer input: "Mum refused to take donepezil again tonight"
+    │
+    ▼
+event_structuring_agent
+    → event_type = "medication_refusal"
+    │
+    ▼
+memory_router.route_memory_requests()
+    → triggers  extract_drug_names = True
+    → routes    mcp_knowledge_topics → ["medication", "medication_refusal"]
+    │
+    ▼
+execute_memory_retrieval()
+    ├── built-in:  retrieve_professional_knowledge(["medication_refusal"])
+    │              → "Do not force medication or self-adjust dose..."
+    │
+    └── MCP:       retrieve_enriched_knowledge(topic, drug_names=["donepezil"])
+                   │
+                   POST https://mcp.drugbank.com/mcp
+                   { "method": "tools/call",
+                     "params": {"name": "drug_search",
+                                "arguments": {"query": "donepezil"}} }
+                   │
+                   ← drug name, indication, mechanism, side-effects...
+                   │
+                   ▼
+    merge_knowledge(builtin, mcp_results)
+        → patient_risk_agent  (risk assessment enriched with pharmacology)
+        → care_plan_agent     (plan includes drug-specific cautions)
+```
+
+#### MCP Routing Rules
+
+| Event type | Built-in topics | MCP topics | Extract drug names |
+|---|---|---|---|
+| `medication_refusal` | `medication_refusal`, `medication` | `medication`, `medication_refusal` | ✅ |
+| `general_note` | matched by content | — | — |
+| others | matched by rule | — | — |
+
+#### Cache and Graceful Degradation
+
+```text
+1. Check local cache (TTL 1 hour)
+      hit  → return cached result
+      miss → continue
+2. POST to DrugBank MCP (max 2 retries)
+      200 OK       → parse, cache, return
+      401 / 403    → silently skip (no API key configured)
+      500+ Timeout → retry, then fall back to built-in only
+3. Built-in KNOWLEDGE_DB is always the final fallback
+```
+
+The system behaves identically to pre-MCP versions when `DRUGBANK_API_KEY` is
+not set — all MCP calls are silently skipped and only built-in knowledge is used.
+
+#### Adding New MCP Sources
+
+Register a new source in `mcp_knowledge_client.py`:
+
+```python
+MCP_SOURCE_REGISTRY["pubchem"] = MCPSourceConfig(
+    source_id="pubchem",
+    endpoint="https://mcp.pubchem.ncbi.nlm.nih.gov/mcp",
+    api_key=os.environ.get("PUBCHEM_API_KEY", ""),
+    available_tools=["compound_search", "compound_details"],
+    description="PubChem chemical compound database",
+)
+```
+
+#### Safety Boundary
+
+MCP-sourced drug data is **caregiver information only** — not a medical decision
+basis.
+
+- ✅ Cite drug indications, side-effects, and interactions as care reference
+- ✅ Annotate all MCP results with `"Source: DrugBank — for reference only"`
+- ✗ Do not substitute MCP data for a doctor's prescription or advice
+- ✗ Do not suggest switching or stopping medication based on MCP results
+- ✗ Do not make "safer" or "more suitable" judgements from external data
+
+#### Configuration
+
+Add to `.env` (optional; omit to use built-in knowledge only):
+
+```env
+DRUGBANK_API_KEY=your_drugbank_api_key_here
+```
+
 ### New Module Files
 
 ```text
 my_agent/
-├── memory_schema.py   — Dataclass definitions for all Memory types + 7 built-in
-│                        professional knowledge entries + Safety Memory rules
-├── memory_state.py    — Thread-safe JSON read/write helpers for memory_store/
-├── memory_tools.py    — ADK-compatible tool functions (retrieve_* / update_*)
-├── memory_router.py   — Routes Memory retrieval requests based on event types
-└── memory_policy.py   — Write-gate: auto / needs_confirmation / blocked
+├── memory_schema.py        — Dataclass definitions for all Memory types +
+│                             built-in professional knowledge + KnowledgeSource
+│                             enum + knowledge_entry_from_mcp() + merge_knowledge()
+├── memory_state.py         — Thread-safe JSON read/write helpers for memory_store/
+├── memory_tools.py         — ADK tool functions: retrieve_* / update_* +
+│                             query_external_knowledge() + retrieve_enriched_knowledge()
+├── memory_router.py        — Event-based routing: decides which Memory types and
+│                             MCP topics to retrieve; populates mcp_knowledge_summary
+├── memory_policy.py        — Write-gate: auto / needs_confirmation / blocked
+└── mcp_knowledge_client.py — Pluggable MCP client: MCPSourceConfig, MCP_SOURCE_REGISTRY,
+                              MCPKnowledgeHub, ExternalKnowledgeResult, local TTL cache
 ```
 
 ---

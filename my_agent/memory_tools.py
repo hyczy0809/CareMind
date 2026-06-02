@@ -10,9 +10,12 @@ from typing import Any
 from .memory_schema import (
     KNOWLEDGE_DB,
     SAFETY_MEMORY,
+    KnowledgeSource,
     default_behavior_entry,
+    knowledge_entry_from_mcp,
     make_episodic_event,
     make_medication_event,
+    merge_knowledge,
 )
 from .memory_state import (
     append_episodic_events,
@@ -127,6 +130,91 @@ def retrieve_professional_knowledge(
         ):
             result.append(entry)
     return result
+
+
+def query_external_knowledge(
+    topics: list[str] | None = None,
+    drug_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    查询外部 MCP 医疗知识源（如 DrugBank）。
+
+    根据 topics 判断是否需要查询药物信息，然后调用 MCPKnowledgeHub。
+    返回结构：
+    {
+      "source_summary": {...},
+      "drug_info": [...],
+      "interactions": [...],
+      "errors": [...],
+    }
+
+    注意：此函数需要 DRUGBANK_API_KEY 环境变量。
+    """
+    from .mcp_knowledge_client import get_mcp_hub
+
+    hub = get_mcp_hub()
+    topics = topics or []
+    drug_names = drug_names or []
+
+    result: dict[str, Any] = {
+        "source_summary": {
+            "available_sources": hub.list_available_sources(),
+            "queried_topics": topics,
+            "queried_drug_names": drug_names,
+        },
+        "drug_info": [],
+        "interactions": [],
+        "errors": [],
+    }
+
+    # 药物名查询（同步调用 async 函数）
+    for drug in drug_names:
+        try:
+            import asyncio
+            info = asyncio.run(hub.query_drug_info(drug, force_refresh=False))
+            for item in info:
+                result["drug_info"].append(knowledge_entry_from_mcp(item))
+        except Exception as e:
+            result["errors"].append({"drug": drug, "error": str(e)})
+
+    # 药物相互作用查询
+    if len(drug_names) >= 2:
+        try:
+            import asyncio
+            interactions = asyncio.run(hub.check_drug_interactions(drug_names))
+            for item in interactions:
+                result["interactions"].append(knowledge_entry_from_mcp(item))
+        except Exception as e:
+            result["errors"].append({"action": "drug_interactions", "error": str(e)})
+
+    return result
+
+
+def retrieve_enriched_knowledge(
+    topics: list[str] | None = None,
+    drug_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    增强知识检索：合并内置 KNOWLEDGE_DB + 外部 MCP 知识。
+
+    优先级：
+    1. MCP 外部知识（权威药学数据，高置信度）
+    2. 内置 KNOWLEDGE_DB（照护通用知识，始终可用）
+
+    返回时每条知识标注 source_type（"inline" 或 "mcp"）。
+    """
+    topics = topics or []
+    drug_names = drug_names or []
+
+    # 内置知识
+    builtin = retrieve_professional_knowledge(topics)
+
+    # 外部知识
+    external = query_external_knowledge(topics=topics, drug_names=drug_names)
+    external_entries = external.get("drug_info", []) + external.get("interactions", [])
+
+    # 合并（外部优先覆盖同 knowledge_id 的内置条目）
+    return merge_knowledge(builtin, external_entries, topic_filter=topics)
 
 
 def retrieve_safety_rules() -> dict[str, Any]:

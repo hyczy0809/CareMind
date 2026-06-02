@@ -427,14 +427,14 @@ def run_cloud_care_workflow(
     caregiver_id: str = "demo_caregiver",
 ) -> dict[str, Any]:
     """
-    CareMind Memory 增强云侧工作流（对应 CareMind_Memory.md 第 8.2 节）：
+    CareMind Memory 增强云侧工作流（对应 CareMind_Memory.md 第 8.2 节 + MCP 扩展）：
 
     Step 1.  事件抽取 — extract_care_signals
     Step 2.  Memory 写入（自动）— update_event_memory
-    Step 3.  Memory Router — 决定检索哪些 Memory
+    Step 3.  Memory Router — 决定检索哪些 Memory（含 MCP 路由）
     Step 4.  执行 Memory 检索 — patient_profile / behavior_baseline / medication / recent_events
-    Step 5.  专业知识检索 — retrieve_professional_knowledge
-    Step 6.  患者风险评估 — assess_patient_risk（结果附带 memory_context）
+    Step 5.  专业知识检索 — retrieve_enriched_knowledge（内置 + MCP 外部混合）
+    Step 6.  患者风险评估 — assess_patient_risk（结果附带 memory_context + external_knowledge）
     Step 7.  照护者压力评估 — assess_caregiver_burden
     Step 8.  照护计划生成 — create_care_plan
     Step 9.  更新照护者状态 Memory — update_caregiver_state
@@ -544,6 +544,8 @@ def run_cloud_care_workflow(
             "caregiver_state": memory_context.get("caregiver_state"),
         },
         "professional_knowledge": prof_knowledge,
+        # MCP 外部知识摘要
+        "mcp_knowledge_summary": memory_context.get("mcp_knowledge_summary"),
         # 各 Agent 输出
         "patient_risk": patient_risk,
         "caregiver_support": caregiver_support,
