@@ -68,8 +68,6 @@ care note
 ├── requirements.txt
 ├── Dockerfile
 ├── .env.example
-├── md/
-│   └── 大纲.md
 └── my_agent/
     ├── agent.py
     ├── cloud_agents.py            # Agent definitions (Memory-augmented)
@@ -184,31 +182,12 @@ provide meaningful, personalised support.
 | Caregiver State | Local (`caregiver_state.json`) | Sleep quality, stress signals, burnout indicators | Default local |
 | Professional Knowledge | Built-in (`memory_schema.py`) | Dementia care guidelines, safety boundaries, communication scripts | Cloud-maintained |
 
-### Memory-Augmented Workflow (`run_cloud_care_workflow`)
-
-The one-shot workflow now runs **11 steps** instead of the original 5:
-
-```text
-Step 1   Event extraction          extract_care_signals / log_extracted_events
-Step 2   Auto-write Episodic Memory update_event_memory
-Step 3   Memory Router             route_memory_requests  (decide what to retrieve)
-Step 4   Memory retrieval          patient_profile / behavior_baseline /
-                                   medication_memory / recent_events /
-                                   caregiver_state / professional_knowledge
-Step 5   Patient risk assessment   assess_patient_risk  (+memory_context_summary)
-Step 6   Caregiver burden check    assess_caregiver_burden
-Step 7   Care plan generation      create_care_plan  (+memory_enriched_hints)
-Step 8   Update caregiver state    update_caregiver_state
-Step 9   Long-term Memory proposal propose_memory_update → classify_memory_candidates
-Step 10  User confirmation prompt  build_confirmation_prompt  (for confirm-required items)
-Step 11  Doctor follow-up summary  generate_doctor_summary
-```
 
 ### Memory-Augmented Agent Tools
 
 Each cloud agent now receives the appropriate Memory tools:
 
-| Agent | Memory tools added |
+| Agent | Memory tools |
 |---|---|
 | `event_structuring_agent` | `update_event_memory`, `retrieve_patient_profile` |
 | `patient_risk_agent` | `retrieve_patient_profile`, `retrieve_recent_events`, `retrieve_behavior_baseline`, `retrieve_professional_knowledge`, `retrieve_safety_rules` |
@@ -360,23 +339,6 @@ Add to `.env` (optional; omit to use built-in knowledge only):
 DRUGBANK_API_KEY=your_drugbank_api_key_here
 ```
 
-### New Module Files
-
-```text
-my_agent/
-├── memory_schema.py        — Dataclass definitions for all Memory types +
-│                             built-in professional knowledge + KnowledgeSource
-│                             enum + knowledge_entry_from_mcp() + merge_knowledge()
-├── memory_state.py         — Thread-safe JSON read/write helpers for memory_store/
-├── memory_tools.py         — ADK tool functions: retrieve_* / update_* +
-│                             query_external_knowledge() + retrieve_enriched_knowledge()
-├── memory_router.py        — Event-based routing: decides which Memory types and
-│                             MCP topics to retrieve; populates mcp_knowledge_summary
-├── memory_policy.py        — Write-gate: auto / needs_confirmation / blocked
-└── mcp_knowledge_client.py — Pluggable MCP client: MCPSourceConfig, MCP_SOURCE_REGISTRY,
-                              MCPKnowledgeHub, ExternalKnowledgeResult, local TTL cache
-```
-
 ---
 
 ## Notes
@@ -389,7 +351,3 @@ my_agent/
 - Otherwise, `CF_AIG_TOKEN` is used as the gateway credential.
 - CareMind provides care support and communication preparation. It does not
   diagnose, prescribe, or replace medical professionals.
-
-## License
-
-MIT
