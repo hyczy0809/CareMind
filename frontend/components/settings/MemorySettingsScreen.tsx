@@ -43,9 +43,9 @@ function eventLabel(name: AnalyticsEvent["name"]) {
     followup_range_changed: "切换复诊范围",
     followup_report_loaded: "生成复诊摘要",
     followup_report_failed: "复诊摘要生成失败",
-    pdf_export_started: "开始导出 PDF",
-    pdf_export_succeeded: "PDF 导出成功",
-    pdf_export_failed: "PDF 导出失败",
+    followup_copy_started: "生成可复制复诊摘要",
+    followup_copy_succeeded: "复制复诊摘要成功",
+    followup_copy_failed: "复制复诊摘要失败",
     document_upload_started: "开始上传复诊资料",
     document_upload_succeeded: "复诊资料上传成功",
     document_upload_failed: "复诊资料上传失败",
@@ -140,7 +140,7 @@ export function MemorySettingsScreen() {
       ) : (
         <Card>
           <Text style={styles.cardTitle}>还没有核心事件</Text>
-          <Text style={styles.body}>保存记录、切换复诊范围或导出 PDF 后，这里会出现本机事件记录。</Text>
+          <Text style={styles.body}>保存记录、切换复诊范围或生成可复制摘要后，这里会出现本机事件记录。</Text>
         </Card>
       )}
     </Screen>

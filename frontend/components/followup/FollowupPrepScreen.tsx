@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { router } from "expo-router";
+import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
-import * as Print from "expo-print";
-import * as Sharing from "expo-sharing";
 import {
   Check,
   ClipboardCheck,
-  Download,
   FileText,
   HelpCircle,
   ListChecks,
@@ -207,44 +204,6 @@ function ReportSyncStatusCard({
   }
 
   return null;
-}
-
-function ProgressCard({ recordCount }: { recordCount: number }) {
-  const progress = Math.min(recordCount / 3, 1);
-  const title =
-    recordCount === 0
-      ? "记录满 3 天后，我会帮你整理复诊材料"
-      : recordCount < 3
-        ? `还差 ${3 - recordCount} 条记录可生成早期摘要`
-        : recordCount < 7
-          ? "早期照护摘要已可生成"
-          : "完整 7 天摘要已可生成";
-  const body =
-    recordCount === 0
-      ? "先去智能记录保存第一条照护记录，复诊准备会自动累积材料。"
-      : recordCount < 3
-        ? "记录越连续，医生越容易看到变化趋势。"
-        : recordCount < 7
-          ? "当前数据仍在积累，摘要会标注为早期参考。"
-          : "你已经有足够的连续记录，可以导出更完整的复诊摘要。";
-
-  return (
-    <Card tone="default">
-      <View style={styles.headerRow}>
-        <FileText color={colors.brand.primaryDark} size={21} />
-        <Text style={styles.cardTitle}>{title}</Text>
-      </View>
-      <Text style={styles.body}>{body}</Text>
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-      </View>
-      {recordCount === 0 ? (
-        <View style={styles.progressAction}>
-          <Button label="去记录今天" onPress={() => router.push("/(tabs)/log")} />
-        </View>
-      ) : null}
-    </Card>
-  );
 }
 
 function DocumentSupplementEntryCard() {
@@ -683,27 +642,6 @@ function DocumentSupplementEntryCard() {
   );
 }
 
-function MetricsGrid({ metrics }: { metrics: ReturnType<typeof useCareMind>["followupMetrics"] }) {
-  return (
-    <Card>
-      {metrics.map((metric, index) => (
-        <View key={metric.label}>
-          <View style={styles.metricRow}>
-            <View style={styles.metricRowLeft}>
-              <Text style={styles.metricLabel}>{metric.label}</Text>
-              <Text style={styles.metricHelper}>{metric.helper}</Text>
-            </View>
-            <Text style={[styles.metricValue, metric.tone === "watch" && styles.metricValueWatch, metric.tone === "alert" && styles.metricValueAlert]}>
-              {metric.value}
-            </Text>
-          </View>
-          {index < metrics.length - 1 ? <View style={styles.metricDivider} /> : null}
-        </View>
-      ))}
-    </Card>
-  );
-}
-
 function ClinicalSummarySheet({ recordCount, summaryBullets }: { recordCount: number; summaryBullets: string[] }) {
   return (
     <Card>
@@ -797,7 +735,7 @@ function ChecklistCard({
   );
 }
 
-function reportHtml({
+function buildCopySummaryText({
   recordCount,
   summaryBullets,
   questions,
@@ -814,53 +752,39 @@ function reportHtml({
   rangeLabel: string;
   generatedAt: string;
 }) {
-  return `
-    <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; padding: 32px; color: #1F2933; }
-          h1 { font-size: 24px; margin: 0 0 6px; }
-          .note { color: #52616B; font-size: 13px; margin-bottom: 24px; }
-          h2 { font-size: 16px; margin-top: 22px; border-bottom: 1px solid #E4E0D8; padding-bottom: 6px; }
-          li { margin-bottom: 8px; line-height: 1.55; }
-          .footer { margin-top: 32px; font-size: 12px; color: #52616B; }
-        </style>
-      </head>
-      <body>
-        <h1>CareMind ${rangeLabel}照护摘要</h1>
-        <div class="note">本摘要为家属照护记录整理，不包含医生诊断。生成时间：${generatedAt}</div>
-        <h2>一、照护记录概况</h2>
-        <ul>
-          <li>已保存 ${recordCount} 条家庭照护记录。</li>
-          <li>${recordCount >= 7 ? "已达到完整 7 天摘要条件。" : "当前仍处于数据积累阶段。"}</li>
-        </ul>
-        <h2>二、主要变化摘要</h2>
-        <ul>
-          ${summaryBullets.map((item) => `<li>${item}</li>`).join("")}
-        </ul>
-        <h2>三、已尝试方法</h2>
-        <ul>
-          ${(triedStrategies.length ? triedStrategies : ["暂无已确认方法"]).map((item) => `<li>${item}</li>`).join("")}
-        </ul>
-        <h2>四、建议复诊时询问</h2>
-        <ul>
-          ${questions.map((q) => `<li>${q}</li>`).join("")}
-        </ul>
-        <h2>五、复诊资料清单</h2>
-        <ul>
-          ${materialItems.map((item) => `<li>${item}</li>`).join("")}
-        </ul>
-        <div class="footer">影像、量表、诊断和用药结论需由医生判断。由家属自行决定是否分享给医生。</div>
-      </body>
-    </html>
-  `;
+  const bullet = (items: string[], fallback: string) => (items.length ? items : [fallback]).map((item) => `- ${item}`).join("\n");
+
+  return [
+    `CareMind ${rangeLabel}复诊沟通摘要`,
+    `生成时间：${generatedAt}`,
+    "说明：以下内容为家属照护记录整理，不包含医生诊断、检查判断或用药建议。",
+    "",
+    "一、照护记录概况",
+    `- 已保存 ${recordCount} 条家庭照护记录。`,
+    `- ${recordCount >= 7 ? "已达到完整 7 天摘要条件。" : "当前仍处于数据积累阶段。"}`,
+    "",
+    "二、主要变化摘要",
+    bullet(summaryBullets, "暂无明确变化摘要。"),
+    "",
+    "三、已尝试方法",
+    bullet(triedStrategies, "暂无已确认方法。"),
+    "",
+    "四、建议复诊时询问",
+    bullet(questions, "暂无问题清单。"),
+    "",
+    "五、复诊资料清单",
+    bullet(materialItems, "暂无资料清单。"),
+    "",
+    "边界说明：影像、量表、诊断和用药结论需由医生判断。是否分享给医生由家属自行决定。"
+  ].join("\n");
 }
 
 export function FollowupPrepScreen() {
-  const { patient, recordCount, followupMetrics, memoryItems, attentionItems, followupDocuments, trackEvent } = useCareMind();
+  const { patient, recordCount, memoryItems, attentionItems, followupDocuments, trackEvent } = useCareMind();
   const [range, setRange] = useState<Range>("7d");
-  const [exporting, setExporting] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copySheetVisible, setCopySheetVisible] = useState(false);
+  const [copySummaryText, setCopySummaryText] = useState("");
   const [report, setReport] = useState<FollowupSummaryResponse | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -881,7 +805,6 @@ export function FollowupPrepScreen() {
   const materialItems = report?.followup_patch.materials_to_bring.length
     ? report.followup_patch.materials_to_bring
     : [...materials, ...confirmedSupplementItems];
-  const displayMetrics = report?.metrics.length ? report.metrics : followupMetrics;
   const hasReportContent = recordCount > 0 || reviewedFollowupDocuments.length > 0;
 
   useEffect(() => {
@@ -950,47 +873,59 @@ export function FollowupPrepScreen() {
     });
   }
 
-  async function exportPdf() {
+  function prepareCopySummary() {
     try {
-      setExporting(true);
-      trackEvent("pdf_export_started", {
+      trackEvent("followup_copy_started", {
         range,
         record_count: recordCount,
         document_count: reviewedFollowupDocuments.length,
         report_source: report ? "backend" : "local"
       });
-      const { uri } = await Print.printToFileAsync({
-        html: reportHtml({
-          recordCount,
-          summaryBullets,
-          questions: doctorQuestions,
-          materialItems,
-          triedStrategies,
-          rangeLabel: rangeLabel(range),
-          generatedAt: report?.generated_at ?? new Date().toLocaleString("zh-CN", { hour12: false })
-        })
+      const text = buildCopySummaryText({
+        recordCount,
+        summaryBullets,
+        questions: doctorQuestions,
+        materialItems,
+        triedStrategies,
+        rangeLabel: rangeLabel(range),
+        generatedAt: report?.generated_at ?? new Date().toLocaleString("zh-CN", { hour12: false })
       });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri);
-      } else {
-        Alert.alert("PDF 已生成", uri);
-      }
-      trackEvent("pdf_export_succeeded", {
-        range,
-        record_count: recordCount,
-        document_count: reviewedFollowupDocuments.length,
-        report_source: report ? "backend" : "local"
-      });
+      setCopySummaryText(text);
+      setCopySheetVisible(true);
     } catch (error) {
-      trackEvent("pdf_export_failed", {
+      trackEvent("followup_copy_failed", {
         range,
         record_count: recordCount,
         document_count: reviewedFollowupDocuments.length,
         reason: error instanceof Error ? error.message : "unknown"
       });
-      Alert.alert("PDF 生成失败", "你可以先复制页面文字，之后再重试导出。");
+      Alert.alert("摘要生成失败", "你可以先复制页面文字，之后再重试。");
+    }
+  }
+
+  async function copySummaryToClipboard() {
+    if (!copySummaryText.trim()) return;
+
+    try {
+      setCopying(true);
+      await Clipboard.setStringAsync(copySummaryText);
+      trackEvent("followup_copy_succeeded", {
+        range,
+        record_count: recordCount,
+        document_count: reviewedFollowupDocuments.length,
+        text_length: copySummaryText.length
+      });
+      Alert.alert("已复制", "复诊摘要已复制，可以粘贴到微信、备忘录或发给医生。");
+    } catch (error) {
+      trackEvent("followup_copy_failed", {
+        range,
+        record_count: recordCount,
+        document_count: reviewedFollowupDocuments.length,
+        reason: error instanceof Error ? error.message : "unknown"
+      });
+      Alert.alert("复制失败", "可以长按文本手动选择复制。");
     } finally {
-      setExporting(false);
+      setCopying(false);
     }
   }
 
@@ -1001,14 +936,11 @@ export function FollowupPrepScreen() {
       <View style={styles.spacer} />
       <SectionTitle title="复诊资料补充" helper="上传资料或手动填写摘要" />
       <DocumentSupplementEntryCard />
-      <ProgressCard recordCount={recordCount} />
       {recordCount >= 3 ? <RangeSelector range={range} onChange={handleRangeChange} /> : null}
 
       {hasReportContent ? (
         <>
           <ReportSyncStatusCard loading={reportLoading} error={reportError} report={report} />
-          <SectionTitle title="近期情况" />
-          <MetricsGrid metrics={displayMetrics} />
           <ClinicalSummarySheet recordCount={recordCount} summaryBullets={summaryBullets} />
           <TriedStrategiesCard confirmedMemories={memoryItems.filter((item) => item.status === "confirmed")} />
           <ChecklistCard
@@ -1021,14 +953,36 @@ export function FollowupPrepScreen() {
           <View style={styles.exportWrap}>
             <Text style={styles.exportNote}>本摘要为家属照护记录整理，不包含医生诊断。</Text>
             <Button
-              label="导出复诊材料"
-              loading={exporting}
-              icon={<Download color="#FFFFFF" size={19} />}
-              onPress={exportPdf}
+              label="生成可复制摘要"
+              icon={<ClipboardCheck color="#FFFFFF" size={19} />}
+              onPress={prepareCopySummary}
             />
           </View>
         </>
       ) : null}
+
+      <Modal visible={copySheetVisible} transparent animationType="slide" onRequestClose={() => setCopySheetVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.copySheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>可复制复诊摘要</Text>
+            <Text style={styles.sheetHelper}>可直接复制到微信、备忘录，或复诊时给医生看。</Text>
+            <TextInput
+              accessibilityLabel="可复制复诊摘要"
+              multiline
+              editable={false}
+              selectTextOnFocus
+              value={copySummaryText}
+              style={styles.copyInput}
+              textAlignVertical="top"
+            />
+            <View style={styles.sheetActions}>
+              <Button label="复制整段文字" loading={copying} onPress={copySummaryToClipboard} />
+              <Button label="关闭" variant="ghost" onPress={() => setCopySheetVisible(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -1051,20 +1005,6 @@ const styles = StyleSheet.create({
     ...typography.helper,
     color: colors.text.secondary,
     marginTop: 8
-  },
-  progressTrack: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.border.subtle,
-    marginTop: 14,
-    overflow: "hidden"
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: colors.brand.primary
-  },
-  progressAction: {
-    marginTop: 14
   },
   documentChipRow: {
     flexDirection: "row",
@@ -1270,22 +1210,6 @@ const styles = StyleSheet.create({
   segmentTextActive: {
     color: colors.text.primary
   },
-  metricValue: {
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: "700" as const,
-    color: colors.text.primary
-  },
-  metricLabel: {
-    ...typography.helper,
-    color: colors.text.secondary,
-    fontWeight: "500" as const
-  },
-  metricHelper: {
-    ...typography.small,
-    color: colors.text.muted,
-    marginTop: 2
-  },
   reportHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -1372,24 +1296,50 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     marginBottom: 8
   },
-  metricRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 12,
-    gap: 12
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(31,41,51,0.28)"
   },
-  metricRowLeft: {
-    flex: 1
+  copySheet: {
+    maxHeight: "88%",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: colors.surface.card,
+    padding: 16,
+    paddingBottom: 30
   },
-  metricDivider: {
-    height: 1,
-    backgroundColor: colors.border.subtle
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border.subtle,
+    alignSelf: "center",
+    marginBottom: 16
   },
-  metricValueWatch: {
-    color: colors.status.watch
+  sheetTitle: {
+    ...typography.cardTitle,
+    color: colors.text.primary
   },
-  metricValueAlert: {
-    color: colors.status.alert
-  }
+  sheetHelper: {
+    ...typography.helper,
+    color: colors.text.secondary,
+    marginTop: 6
+  },
+  copyInput: {
+    minHeight: 260,
+    maxHeight: 420,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.surface.muted,
+    padding: 12,
+    marginTop: 14,
+    ...typography.helper,
+    color: colors.text.primary
+  },
+  sheetActions: {
+    gap: 8,
+    marginTop: 14
+  },
 });

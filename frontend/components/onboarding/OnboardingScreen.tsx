@@ -1,12 +1,62 @@
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
-import { ChevronRight, Eye, FileText, HeartHandshake, MessageSquare } from "lucide-react-native";
+import { Audio } from "expo-av";
+import {
+  ChevronRight,
+  ClipboardList,
+  Eye,
+  FileText,
+  HeartHandshake,
+  HeartPulse,
+  MessageSquare,
+  Mic,
+  Puzzle,
+  UploadCloud
+} from "lucide-react-native";
 import { useCareMind } from "../../lib/caremind-store";
+import { transcribeAudioNote } from "../../lib/care-workflow-api";
 import { colors, hitSlop, typography } from "../../lib/theme";
+import type { AnalyticsEvent } from "../../types/caremind";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Screen } from "../ui/Screen";
+
+type VoiceState = "idle" | "listening" | "transcribing" | "unsupported" | "error";
+
+type BrowserSpeechRecognitionResult = {
+  isFinal: boolean;
+  0?: {
+    transcript?: string;
+  };
+};
+
+type BrowserSpeechRecognitionEvent = {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: BrowserSpeechRecognitionResult;
+  };
+};
+
+type BrowserSpeechRecognitionErrorEvent = {
+  error?: string;
+};
+
+type BrowserSpeechRecognition = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+};
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 const nicknameChips = [
   "妈妈",
@@ -55,6 +105,346 @@ function toggleTag(current: string[], tag: string) {
   return current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag];
 }
 
+function getSpeechRecognitionConstructor(): BrowserSpeechRecognitionConstructor | null {
+  if (Platform.OS !== "web" || typeof window === "undefined") {
+    return null;
+  }
+
+  const speechWindow = window as typeof window & {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  };
+
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+}
+
+function buildVoiceErrorMessage(error?: string) {
+  if (error === "not-allowed" || error === "service-not-allowed") {
+    return "麦克风权限被浏览器拒绝。请点地址栏左侧的网站设置，允许麦克风，然后刷新页面再试。";
+  }
+  if (error === "no-speech") {
+    return "没有听到声音，可以靠近一点再试。";
+  }
+  if (error === "audio-capture") {
+    return "没有检测到可用麦克风。";
+  }
+  return "这次没有成功转成文字，可以再试一次或手动输入。";
+}
+
+function ConcernVoiceButton({
+  value,
+  onChange,
+  onTrackVoiceEvent
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onTrackVoiceEvent: (name: "voice_input_started" | "voice_input_succeeded" | "voice_input_failed" | "voice_input_unsupported", properties?: AnalyticsEvent["properties"]) => void;
+}) {
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const latestValueRef = useRef(value);
+  const finalTranscriptRef = useRef("");
+  const voiceHadErrorRef = useRef(false);
+  const nativeStopRequestedRef = useRef(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceHint, setVoiceHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    latestValueRef.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
+      if (recordingRef.current) {
+        void recordingRef.current.stopAndUnloadAsync().catch(() => undefined);
+        recordingRef.current = null;
+      }
+    };
+  }, []);
+
+  function appendTranscript(transcript: string) {
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript) return;
+
+    const current = latestValueRef.current.trim();
+    const separator = current && !/[，。！？,.!?]$/.test(current) ? "，" : "";
+    onChange(current ? `${current}${separator}${cleanTranscript}` : cleanTranscript);
+  }
+
+  function unsupportedVoiceInput() {
+    setVoiceState("unsupported");
+    setVoiceHint(
+      Platform.OS === "web"
+        ? "当前浏览器不支持语音转文字。建议用 Chrome / Edge，或先手动输入。"
+        : "当前设备暂不支持录音转文字，可以先手动输入。"
+    );
+    onTrackVoiceEvent("voice_input_unsupported", {
+      platform: Platform.OS,
+      entry: "onboarding_concern"
+    });
+  }
+
+  function startWebSpeechInput() {
+    const SpeechRecognition = getSpeechRecognitionConstructor();
+    if (!SpeechRecognition) {
+      unsupportedVoiceInput();
+      return;
+    }
+
+    recognitionRef.current?.abort();
+    finalTranscriptRef.current = "";
+    voiceHadErrorRef.current = false;
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "zh-CN";
+    recognition.interimResults = true;
+    recognition.continuous = true;
+
+    recognition.onstart = () => {
+      setVoiceState("listening");
+      setVoiceHint("正在听，松手后我会转成文字。");
+      onTrackVoiceEvent("voice_input_started", {
+        platform: Platform.OS,
+        entry: "onboarding_concern"
+      });
+    };
+
+    recognition.onresult = (event) => {
+      let finalText = "";
+      let interimText = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript ?? "";
+        if (result.isFinal) {
+          finalText += transcript;
+        } else {
+          interimText += transcript;
+        }
+      }
+
+      if (finalText.trim()) {
+        finalTranscriptRef.current = `${finalTranscriptRef.current}${finalText}`;
+        setVoiceHint(`已听到：${finalTranscriptRef.current.trim()}`);
+      } else if (interimText.trim()) {
+        setVoiceHint(`正在听：${interimText.trim()}`);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      voiceHadErrorRef.current = true;
+      recognitionRef.current = null;
+      setVoiceState("error");
+      setVoiceHint(buildVoiceErrorMessage(event.error));
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        reason: event.error ?? "unknown"
+      });
+    };
+
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      if (voiceHadErrorRef.current) return;
+
+      const transcript = finalTranscriptRef.current.trim();
+      if (transcript) {
+        appendTranscript(transcript);
+        setVoiceHint("已转成文字，可以继续补充。");
+        onTrackVoiceEvent("voice_input_succeeded", {
+          platform: Platform.OS,
+          entry: "onboarding_concern",
+          transcript_length: transcript.length
+        });
+      } else {
+        setVoiceHint("没有听到清楚内容，可以再按住说一次。");
+      }
+      setVoiceState("idle");
+    };
+
+    recognitionRef.current = recognition;
+    setVoiceState("listening");
+    setVoiceHint("正在请求麦克风权限……");
+
+    try {
+      recognition.start();
+    } catch (error) {
+      recognitionRef.current = null;
+      setVoiceState("error");
+      setVoiceHint("语音识别没有启动成功，可以刷新页面后再试。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        reason: error instanceof Error ? error.message : "start_failed"
+      });
+    }
+  }
+
+  function stopWebSpeechInput() {
+    if (!recognitionRef.current) return;
+    setVoiceHint("正在转成文字……");
+    try {
+      recognitionRef.current.stop();
+    } catch {
+      recognitionRef.current = null;
+      setVoiceState("idle");
+    }
+  }
+
+  async function startNativeRecording() {
+    if (recordingRef.current || voiceState === "transcribing") return;
+
+    nativeStopRequestedRef.current = false;
+    setVoiceState("listening");
+    setVoiceHint("正在请求麦克风权限……");
+
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        setVoiceState("error");
+        setVoiceHint("没有麦克风权限，请在系统设置里允许 CareMind 使用麦克风。");
+        onTrackVoiceEvent("voice_input_failed", {
+          platform: Platform.OS,
+          entry: "onboarding_concern",
+          reason: "microphone_permission_denied"
+        });
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true
+      });
+
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await recording.startAsync();
+      recordingRef.current = recording;
+      setVoiceHint("正在录音，松手后我会转成文字。");
+      onTrackVoiceEvent("voice_input_started", {
+        platform: Platform.OS,
+        entry: "onboarding_concern"
+      });
+
+      if (nativeStopRequestedRef.current) {
+        await stopNativeRecording();
+      }
+    } catch (error) {
+      recordingRef.current = null;
+      nativeStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint("录音没有启动成功，可以检查麦克风权限后再试。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        reason: error instanceof Error ? error.message : "recording_start_failed"
+      });
+    }
+  }
+
+  async function stopNativeRecording() {
+    const recording = recordingRef.current;
+    if (!recording) {
+      nativeStopRequestedRef.current = true;
+      return;
+    }
+
+    recordingRef.current = null;
+    nativeStopRequestedRef.current = false;
+    setVoiceState("transcribing");
+    setVoiceHint("正在上传并转成文字……");
+
+    try {
+      await recording.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true
+      });
+
+      const uri = recording.getURI();
+      if (!uri) {
+        throw new Error("recording_uri_missing");
+      }
+
+      const result = await transcribeAudioNote({
+        patientId: "onboarding_patient",
+        language: "zh",
+        asset: {
+          uri,
+          name: `caremind_onboarding_${Date.now()}.m4a`,
+          mimeType: "audio/m4a"
+        }
+      });
+
+      appendTranscript(result.transcript);
+      setVoiceState("idle");
+      setVoiceHint("已转成文字，可以继续补充。");
+      onTrackVoiceEvent("voice_input_succeeded", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        transcript_length: result.transcript.length
+      });
+    } catch (error) {
+      setVoiceState("error");
+      setVoiceHint(error instanceof Error ? error.message : "语音转文字失败，可以再试一次或手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        reason: error instanceof Error ? error.message : "native_transcription_failed"
+      });
+    }
+  }
+
+  function startVoiceInput() {
+    if (Platform.OS === "web") {
+      startWebSpeechInput();
+      return;
+    }
+    void startNativeRecording();
+  }
+
+  function stopVoiceInput() {
+    if (Platform.OS === "web") {
+      stopWebSpeechInput();
+      return;
+    }
+    void stopNativeRecording();
+  }
+
+  const voiceActive = voiceState === "listening" || voiceState === "transcribing";
+  const voiceUnavailable = voiceState === "unsupported" || voiceState === "error";
+  const voiceLabel = voiceState === "listening" ? "正在听" : voiceState === "transcribing" ? "转写中" : "按住说话";
+
+  return (
+    <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="按住说话，松手结束"
+        accessibilityState={{ busy: voiceActive }}
+        hitSlop={hitSlop}
+        onPressIn={startVoiceInput}
+        onPressOut={stopVoiceInput}
+        style={({ pressed }) => [
+          styles.voiceButton,
+          voiceActive && styles.voiceButtonActive,
+          voiceUnavailable && styles.voiceButtonUnavailable,
+          pressed && styles.voiceButtonPressed
+        ]}
+      >
+        <Mic color={voiceActive ? colors.text.inverse : voiceUnavailable ? colors.status.watch : colors.text.secondary} size={18} />
+        <Text style={[styles.voiceText, voiceActive && styles.voiceTextActive, voiceUnavailable && styles.voiceTextUnavailable]}>
+          {voiceLabel}
+        </Text>
+      </Pressable>
+      {voiceHint ? <Text style={[styles.voiceHint, voiceUnavailable && styles.voiceHintWarning]}>{voiceHint}</Text> : null}
+    </>
+  );
+}
+
 function StepProgressBar({ step }: { step: number }) {
   return (
     <View style={styles.stepper}>
@@ -77,8 +467,8 @@ const introSlides = [
   },
   {
     key: "features",
-    pill: "它能帮你做三件事",
-    title: "记录、整理、沟通",
+    pill: "家庭照护导航",
+    title: "把每天的照护，\n分成六件小事",
     body: ""
   },
   {
@@ -91,19 +481,34 @@ const introSlides = [
 
 const features = [
   {
-    icon: MessageSquare,
-    title: "把今天说给我听",
-    body: "一句话就够了。我来整理成睡眠、行为、饮食、用药的清晰记录。"
+    icon: ClipboardList,
+    title: "记录整理",
+    body: "一句话整理成睡眠、行为、饮食、用药记录。"
   },
   {
     icon: Eye,
-    title: "今天值得留意的事",
-    body: "不是诊断，是观察。我把今晚最该留意的地方整理出来，附上今天能做到的建议。"
+    title: "今日行动",
+    body: "提示今晚最该关注的事，附上能做到的小行动。"
   },
   {
-    icon: FileText,
-    title: "复诊材料一键整理",
-    body: "把近 7 天的变化整理成医生容易看懂的摘要，带着去复诊。"
+    icon: MessageSquare,
+    title: "沟通话术",
+    body: "遇到“有人偷钱”“要回家”，给出低冲突回应。"
+  },
+  {
+    icon: Puzzle,
+    title: "陪伴活动",
+    body: "照片、老歌、配对/分类小游戏，记录参与反应。"
+  },
+  {
+    icon: UploadCloud,
+    title: "资料复诊",
+    body: "病历、检查、用药清单，汇入复诊摘要。"
+  },
+  {
+    icon: HeartPulse,
+    title: "照护者支持",
+    body: "记录压力和疲惫，提醒休息与家人轮替。"
   }
 ];
 
@@ -120,7 +525,7 @@ function IntroDots({ total, current }: { total: number; current: number }) {
   );
 }
 
-function IntroCarousel({ onDone, onDemo }: { onDone: () => void; onDemo: () => void }) {
+function IntroCarousel({ onDone }: { onDone: () => void }) {
   const [slide, setSlide] = useState(0);
   const isLast = slide === introSlides.length - 1;
   const current = introSlides[slide];
@@ -186,14 +591,11 @@ function IntroCarousel({ onDone, onDemo }: { onDone: () => void; onDemo: () => v
 
       <View style={styles.introActions}>
         {isLast ? (
-          <>
-            <Button
-              label="开始设置"
-              onPress={onDone}
-              icon={<ChevronRight color="#FFFFFF" size={19} />}
-            />
-            <Button label="加载 3 分钟演示数据" variant="ghost" onPress={onDemo} />
-          </>
+          <Button
+            label="开始设置"
+            onPress={onDone}
+            icon={<ChevronRight color="#FFFFFF" size={19} />}
+          />
         ) : (
           <Button
             label="下一步"
@@ -207,7 +609,7 @@ function IntroCarousel({ onDone, onDemo }: { onDone: () => void; onDemo: () => v
 }
 
 export function OnboardingScreen() {
-  const { completeOnboarding, loadDemoData } = useCareMind();
+  const { completeOnboarding, trackEvent } = useCareMind();
   const [landed, setLanded] = useState(false);
   const [step, setStep] = useState(0);
   const [nickname, setNickname] = useState("");
@@ -220,13 +622,8 @@ export function OnboardingScreen() {
 
   const canContinue = step === 0 ? nickname.trim().length > 0 : step === 2 ? concern.trim().length > 0 : true;
 
-  function handleDemo() {
-    loadDemoData();
-    router.replace("/(tabs)/today");
-  }
-
   if (!landed) {
-    return <IntroCarousel onDone={() => setLanded(true)} onDemo={handleDemo} />;
+    return <IntroCarousel onDone={() => setLanded(true)} />;
   }
 
   function next() {
@@ -307,7 +704,6 @@ export function OnboardingScreen() {
             </View>
             <View style={styles.uploadCopy}>
               <Text style={styles.uploadTitle}>添加病历/检查资料</Text>
-              <Text style={styles.uploadSubtitle}>Demo 版先填写摘要；后续可接入 PDF/图片上传。</Text>
             </View>
           </Pressable>
 
@@ -397,6 +793,7 @@ export function OnboardingScreen() {
             style={[styles.input, styles.textarea]}
             textAlignVertical="top"
           />
+          <ConcernVoiceButton value={concern} onChange={setConcern} onTrackVoiceEvent={trackEvent} />
           <View style={styles.chipRow}>
             {concernChips.map((chip) => (
               <Pressable
@@ -483,15 +880,15 @@ const styles = StyleSheet.create({
   featureRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 14,
-    paddingVertical: 14,
+    gap: 12,
+    paddingVertical: 11,
     borderBottomWidth: 1,
     borderBottomColor: colors.border.subtle
   },
   featureIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 11,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.brand.primarySoft,
@@ -509,7 +906,7 @@ const styles = StyleSheet.create({
   featureBody: {
     ...typography.helper,
     color: colors.text.secondary,
-    lineHeight: 20
+    lineHeight: 19
   },
   disclaimer: {
     ...typography.small,
@@ -632,11 +1029,6 @@ const styles = StyleSheet.create({
     ...typography.label,
     color: colors.text.primary
   },
-  uploadSubtitle: {
-    ...typography.small,
-    color: colors.text.secondary,
-    marginTop: 3
-  },
   chipRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -666,6 +1058,44 @@ const styles = StyleSheet.create({
     ...typography.small,
     color: colors.status.watch,
     marginTop: 10
+  },
+  voiceButton: {
+    minHeight: 46,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    backgroundColor: colors.surface.muted,
+    marginTop: 12
+  },
+  voiceButtonActive: {
+    backgroundColor: colors.brand.primary
+  },
+  voiceButtonUnavailable: {
+    backgroundColor: colors.statusSoft.watch
+  },
+  voiceButtonPressed: {
+    opacity: 0.88
+  },
+  voiceText: {
+    ...typography.label,
+    color: colors.text.secondary
+  },
+  voiceTextActive: {
+    color: colors.text.inverse
+  },
+  voiceTextUnavailable: {
+    color: colors.status.watch
+  },
+  voiceHint: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginTop: 8
+  },
+  voiceHintWarning: {
+    color: colors.status.watch
   },
   secondaryAction: {
     marginTop: 12

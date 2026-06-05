@@ -93,7 +93,7 @@ function getSpeechRecognitionConstructor(): BrowserSpeechRecognitionConstructor 
 
 function buildVoiceErrorMessage(error?: string) {
   if (error === "not-allowed" || error === "service-not-allowed") {
-    return "浏览器没有麦克风权限，请允许后再试。";
+    return "麦克风权限被浏览器拒绝。请点地址栏左侧的网站设置，允许麦克风，然后刷新页面再试。";
   }
   if (error === "no-speech") {
     return "没有听到声音，可以靠近一点再试。";
@@ -813,21 +813,6 @@ function InstantScriptCard({ advice }: { advice: ScriptAdvice }) {
   );
 }
 
-function SavedState() {
-  return (
-    <Card tone="default">
-      <View style={styles.headerRow}>
-        <Check color={colors.brand.primary} size={22} />
-        <Text style={styles.cardTitle}>已写入今天的照护日志</Text>
-      </View>
-      <Text style={styles.body}>去今日照护查看今晚行动建议，或继续再记一条。</Text>
-      <View style={styles.speechButton}>
-        <Button label="去今日照护" variant="secondary" onPress={() => router.push("/(tabs)/today")} />
-      </View>
-    </Card>
-  );
-}
-
 function MilestoneToast({ text }: { text: string }) {
   return (
     <View style={styles.toastWrap} pointerEvents="none">
@@ -925,23 +910,25 @@ export function SmartLogScreen() {
       <PageHeader title="智能记录" subtitle={headerDateTime} />
       {toast ? <MilestoneToast text={toast} /> : null}
 
-      <MagicLogInput
-        value={value}
-        onChange={(next) => {
-          setValue(next);
-          setInputError(null);
-        }}
-        onParse={parse}
-        onTrackVoiceEvent={trackEvent}
-        eventAt={eventAt}
-        onChangeEventAt={setEventAt}
-        parseState={parseState}
-        showBoundary={showBoundary}
-        onDismissBoundary={() => setBoundaryDismissed(true)}
-        error={inputError}
-        patientId={patient.id}
-        nickname={patient.nickname}
-      />
+      {parseState !== "saved" ? (
+        <MagicLogInput
+          value={value}
+          onChange={(next) => {
+            setValue(next);
+            setInputError(null);
+          }}
+          onParse={parse}
+          onTrackVoiceEvent={trackEvent}
+          eventAt={eventAt}
+          onChangeEventAt={setEventAt}
+          parseState={parseState}
+          showBoundary={showBoundary}
+          onDismissBoundary={() => setBoundaryDismissed(true)}
+          error={inputError}
+          patientId={patient.id}
+          nickname={patient.nickname}
+        />
+      ) : null}
       {parseState === "parsing" ? <AgentProgressCard completedSteps={completedSteps} /> : null}
       {(parseState === "parsed" || parseState === "saved") && parsedLog ? (
         <>
@@ -954,7 +941,6 @@ export function SmartLogScreen() {
           ) : null}
           {scriptAdvice ? <InstantScriptCard advice={scriptAdvice} /> : null}
           {candidate ? <MemoryCandidateCard item={candidate} /> : null}
-          {parseState === "saved" ? <SavedState /> : null}
           <View style={styles.saveActions}>
             <Button label={parseState === "saved" ? "再记一条" : "写入日志"} onPress={parseState === "saved" ? resetInput : save} />
           </View>

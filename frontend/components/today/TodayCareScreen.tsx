@@ -5,7 +5,6 @@ import {
   Bell,
   Check,
   ChevronDown,
-  CircleUserRound,
   Eye,
   HeartPulse,
   Images,
@@ -338,45 +337,6 @@ function CompanionActivityEntryCard({
   );
 }
 
-function PatientStatusBar({
-  nickname,
-  updatedAt,
-  attentionItems
-}: {
-  nickname: string;
-  updatedAt: string;
-  attentionItems: AttentionItem[];
-}) {
-  const highRisk = attentionItems.some((item) => item.severity === "high" || item.severity === "crisis");
-  const hasAttention = attentionItems.length > 0;
-  const statusLabel = highRisk ? "今晚留意" : hasAttention ? "有几件事" : "今天平稳";
-  const statusStyle = highRisk ? styles.statusAlert : hasAttention ? styles.statusWatch : styles.statusCalm;
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${nickname}，状态${statusLabel}，${updatedAt}`}
-      hitSlop={hitSlop}
-      onPress={() => router.push("/settings")}
-      style={styles.statusBar}
-    >
-      <View style={styles.statusAvatar}>
-        <CircleUserRound color={colors.brand.primaryDark} size={26} />
-      </View>
-      <View style={styles.statusContent}>
-        <Text style={styles.statusName}>{nickname}</Text>
-        <View style={styles.timeRow}>
-          <Moon color={colors.text.muted} size={14} />
-          <Text style={styles.muted}>{updatedAt}</Text>
-        </View>
-      </View>
-      <View style={[styles.statusBadge, statusStyle]}>
-        <Text style={styles.statusBadgeText}>{statusLabel}</Text>
-      </View>
-    </Pressable>
-  );
-}
-
 function PreviousDayFollowupCard({
   followups,
   onActionChange
@@ -545,7 +505,7 @@ function CaregiverFourDimCheckin({ onSave }: { onSave: (checkin: CaregiverChecki
           <Text style={styles.adviceText}>{buildCaregiverAdvice(savedCheckin)}</Text>
         </View>
       ) : (
-        <Text style={styles.body}>可选填。保存后，我会给你一个今天更轻一点的照护建议。</Text>
+        <Text style={styles.body}>可选填。保存后，这里会显示一条给你自己的提醒。</Text>
       )}
       <View style={styles.checkinAction}>
         <Button
@@ -806,7 +766,6 @@ export function TodayCareScreen() {
   return (
     <Screen>
       <PageHeader title="今日照护" subtitle="把零散照护记录整理成今晚行动与复诊材料" />
-      <PatientStatusBar nickname={patient.nickname} updatedAt={patient.updatedAt} attentionItems={visibleAttentionItems} />
       <PreviousDayFollowupCard followups={previousDayFollowups} onActionChange={updateAction} />
 
       <SectionTitle title="今日陪伴" helper="低压力活动，不测试记忆" />
@@ -841,63 +800,6 @@ export function TodayCareScreen() {
 }
 
 const styles = StyleSheet.create({
-  statusBar: {
-    minHeight: 68,
-    borderRadius: 16,
-    backgroundColor: colors.surface.card,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    padding: 12,
-    marginBottom: 12,
-    ...shadow.card
-  },
-  statusAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.brand.primarySoft
-  },
-  statusContent: {
-    flex: 1
-  },
-  statusName: {
-    ...typography.cardTitle,
-    color: colors.text.primary
-  },
-  statusBadge: {
-    minHeight: 34,
-    borderRadius: 17,
-    paddingHorizontal: 12,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  statusCalm: {
-    backgroundColor: colors.statusSoft.calm
-  },
-  statusWatch: {
-    backgroundColor: colors.statusSoft.watch
-  },
-  statusAlert: {
-    backgroundColor: colors.statusSoft.alert
-  },
-  statusBadgeText: {
-    ...typography.small,
-    fontWeight: "700" as const,
-    color: colors.text.secondary
-  },
-  timeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginTop: 2
-  },
-  muted: {
-    ...typography.helper,
-    color: colors.text.muted
-  },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
