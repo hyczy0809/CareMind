@@ -9,7 +9,7 @@ interface ScreenProps {
   bottomInset?: number;
 }
 
-export function Screen({ children, scroll = true, bottomInset = 104 }: ScreenProps) {
+export function Screen({ children, scroll = true, bottomInset = 124 }: ScreenProps) {
   if (!scroll) {
     return (
       <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>

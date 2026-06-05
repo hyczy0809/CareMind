@@ -2,9 +2,14 @@ import { Tabs } from "expo-router";
 import { BlurView } from "expo-blur";
 import { ClipboardList, FileText, Home } from "lucide-react-native";
 import { StyleSheet } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../../lib/theme";
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, 18);
+  const tabBarHeight = 62 + bottomPadding;
+
   return (
     <Tabs
       screenOptions={{
@@ -16,7 +21,13 @@ export default function TabsLayout() {
           fontWeight: "700"
         },
         tabBarItemStyle: styles.tabBarItem,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [
+          styles.tabBar,
+          {
+            height: tabBarHeight,
+            paddingBottom: bottomPadding
+          }
+        ],
         tabBarBackground: () => <BlurView intensity={28} tint="light" style={StyleSheet.absoluteFill} />
       }}
     >
@@ -47,9 +58,8 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    minHeight: 68,
+    minHeight: 82,
     paddingTop: 7,
-    paddingBottom: 12,
     borderTopWidth: 1,
     borderTopColor: colors.border.subtle,
     backgroundColor: "rgba(255,253,249,0.92)",
@@ -61,7 +71,7 @@ const styles = StyleSheet.create({
     elevation: 12
   },
   tabBarItem: {
-    minHeight: 52,
+    minHeight: 56,
     paddingTop: 4
   }
 });
