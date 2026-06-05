@@ -2,21 +2,28 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import {
-  AlertTriangle,
+  Bell,
   Check,
   ChevronDown,
   CircleUserRound,
-  Clock3,
+  Eye,
   HeartPulse,
-  LineChart,
+  Images,
+  Moon,
   ShieldCheck,
+  TrendingUp,
   X
 } from "lucide-react-native";
 import type {
   ActionStatus,
+  AnalyticsEvent,
+  AnalyticsEventName,
   AttentionItem,
   CaregiverCheckin,
   CaregiverCheckinRecord,
+  CompanionActivityFeedback,
+  CompanionActivityRecord,
+  CompanionActivityType,
   StressLevel
 } from "../../types/caremind";
 import { useCareMind } from "../../lib/caremind-store";
@@ -52,6 +59,71 @@ const supportOptions = [
   { label: "能帮一点", value: "partial" as const },
   { label: "有人帮", value: "yes" as const }
 ];
+const companionActivityTemplates: Record<
+  CompanionActivityType,
+  {
+    name: string;
+    durationMinutes: number;
+    difficulty: "低";
+    bestFor: string;
+    recommendationReason: string;
+    steps: string[];
+    memoryHint: string;
+  }
+> = {
+  photo_reminiscence: {
+    name: "老照片回忆",
+    durationMinutes: 5,
+    difficulty: "低",
+    bestFor: "焦虑、想回家、需要安抚时",
+    recommendationReason: "今天更适合先做熟悉、低压力的陪伴活动。",
+    steps: [
+      "选一张熟悉、情绪稳定的老照片。",
+      "先描述你看到的内容，不直接考她记不记得。",
+      "问一个轻一点的问题：这张照片让你想到什么？",
+      "如果她不想说，就一起看一会儿，别追问。"
+    ],
+    memoryHint: "这次活动如果能让她更平静，会生成“老照片可能有帮助”的候选记忆。"
+  },
+  object_matching: {
+    name: "颜色/物品配对",
+    durationMinutes: 4,
+    difficulty: "低",
+    bestFor: "状态平稳、有一点参与意愿时",
+    recommendationReason: "今天状态较平稳，可以试一个更有互动感的小活动。",
+    steps: [
+      "准备 3-4 组安全、熟悉的物品，比如袜子、杯垫或颜色卡片。",
+      "先示范一组：这两个看起来像一对，我们放在一起。",
+      "邀请她一起配一组；如果配错，也说“我们换个放法试试”。",
+      "只做几组就停，不追求全部完成。"
+    ],
+    memoryHint: "这次活动如果参与顺利，会记录为短时陪伴活动候选。"
+  },
+  familiar_sorting: {
+    name: "熟悉物品分类",
+    durationMinutes: 5,
+    difficulty: "低",
+    bestFor: "想一起整理旧物、需要一点参与感时",
+    recommendationReason: "可以通过熟悉物品给她一点参与感，但不需要纠错。",
+    steps: [
+      "准备 5-6 件安全熟悉的物品，比如照片、毛巾、杯子或小工具。",
+      "分成两个很简单的区域，比如“照片”和“日用品”。",
+      "邀请她把其中一件放到喜欢的位置；放哪里都先接纳。",
+      "如果她开始烦躁，就停止分类，改成一起看物品。"
+    ],
+    memoryHint: "这次活动如果能带来参与感，会记录为熟悉物品陪伴候选。"
+  }
+};
+const participationOptions = [
+  { label: "愿意参与", value: "willing" as const },
+  { label: "不太愿意", value: "hesitant" as const },
+  { label: "明显抗拒", value: "resistant" as const }
+];
+const moodAfterOptions = [
+  { label: "更平静", value: "calmer" as const },
+  { label: "差不多", value: "same" as const },
+  { label: "更烦躁", value: "more_agitated" as const }
+];
 
 function EmptyTodayCard() {
   return (
@@ -68,6 +140,204 @@ function EmptyTodayCard() {
   );
 }
 
+function CompanionActivityEntryCard({
+  nickname,
+  records,
+  recommendedType,
+  recommendationReason,
+  onSave,
+  onTrack
+}: {
+  nickname: string;
+  records: CompanionActivityRecord[];
+  recommendedType: CompanionActivityType;
+  recommendationReason: string;
+  onSave: (feedback: CompanionActivityFeedback) => void;
+  onTrack: (name: AnalyticsEventName, properties?: AnalyticsEvent["properties"]) => void;
+}) {
+  const [flow, setFlow] = useState<"idle" | "active" | "feedback" | "saved">("idle");
+  const [selectedType, setSelectedType] = useState<CompanionActivityType>(recommendedType);
+  const [stoppedEarly, setStoppedEarly] = useState(false);
+  const [participation, setParticipation] = useState<CompanionActivityFeedback["participation"] | null>(null);
+  const [moodAfter, setMoodAfter] = useState<CompanionActivityFeedback["moodAfter"] | null>(null);
+  const [frustration, setFrustration] = useState(false);
+  const [fatigue, setFatigue] = useState(false);
+  const selectedTemplate = companionActivityTemplates[selectedType];
+  const latestRecord = records[0];
+  const canSave = !!participation && !!moodAfter;
+  const positiveFeedback = participation === "willing" && moodAfter === "calmer" && !frustration && !fatigue;
+
+  function selectActivity(type: CompanionActivityType) {
+    setSelectedType(type);
+    setFlow("idle");
+  }
+
+  function startActivity() {
+    setStoppedEarly(false);
+    setParticipation(null);
+    setMoodAfter(null);
+    setFrustration(false);
+    setFatigue(false);
+    setFlow("active");
+    onTrack("activity_started", {
+      activity_type: selectedType,
+      activity_name: selectedTemplate.name
+    });
+    void selectionHaptic();
+  }
+
+  function endActivity(nextStoppedEarly: boolean) {
+    setStoppedEarly(nextStoppedEarly);
+    setFlow("feedback");
+    onTrack(nextStoppedEarly ? "activity_stopped" : "activity_completed", {
+      activity_type: selectedType,
+      stopped_early: nextStoppedEarly
+    });
+    void selectionHaptic();
+  }
+
+  function saveFeedback() {
+    if (!canSave || !participation || !moodAfter) return;
+
+    onSave({
+      activityType: selectedType,
+      activityName: selectedTemplate.name,
+      durationMinutes: stoppedEarly ? Math.max(1, Math.round(selectedTemplate.durationMinutes / 2)) : selectedTemplate.durationMinutes,
+      participation,
+      moodAfter,
+      frustration,
+      fatigue,
+      stoppedEarly
+    });
+    setFlow("saved");
+    void selectionHaptic();
+  }
+
+  return (
+    <Card tone="brand">
+      <View style={styles.headerRow}>
+        <Images color={colors.brand.primaryDark} size={20} />
+        <Text style={styles.cardTitle}>陪 {nickname} 做一个轻量活动</Text>
+      </View>
+      <Text style={styles.body}>今日推荐：{companionActivityTemplates[recommendedType].name}。重点是陪伴和情绪，不计分、不纠错。</Text>
+      <View style={styles.recommendationBox}>
+        <Text style={styles.recommendationText}>{recommendationReason}</Text>
+      </View>
+
+      {latestRecord ? (
+        <View style={styles.activityLastBox}>
+          <Text style={styles.activityLastTitle}>上次陪伴反馈</Text>
+          <Text style={styles.activityLastText}>
+            {latestRecord.activityName} · {latestRecord.participation === "willing" ? "愿意参与" : latestRecord.participation === "hesitant" ? "不太愿意" : "明显抗拒"} ·{" "}
+            {latestRecord.moodAfter === "calmer" ? "更平静" : latestRecord.moodAfter === "same" ? "差不多" : "更烦躁"}
+          </Text>
+        </View>
+      ) : null}
+
+      {flow === "idle" ? (
+        <>
+          <View style={styles.activitySelector}>
+            {(Object.keys(companionActivityTemplates) as CompanionActivityType[]).map((type) => {
+              const template = companionActivityTemplates[type];
+              const selected = selectedType === type;
+              return (
+                <Pressable
+                  key={type}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  hitSlop={hitSlop}
+                  onPress={() => selectActivity(type)}
+                  style={[styles.activityOption, selected && styles.activityOptionSelected]}
+                >
+                  <Text style={[styles.activityOptionTitle, selected && styles.activityOptionTitleSelected]}>{template.name}</Text>
+                  <Text style={[styles.activityOptionMeta, selected && styles.activityOptionMetaSelected]}>
+                    {template.durationMinutes} 分钟 · 难度{template.difficulty}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={styles.activityPreviewRow}>
+            {["不考记忆", "无倒计时", "可随时停止", selectedTemplate.bestFor].map((item) => (
+              <View key={item} style={styles.activityPreviewChip}>
+                <Text style={styles.activityPreviewText}>{item}</Text>
+              </View>
+            ))}
+          </View>
+          <View style={styles.boundaryBox}>
+            <Text style={styles.boundaryText}>这不是治疗方案。若活动中出现烦躁、疲惫或抗拒，建议停止并改为安静陪伴。</Text>
+          </View>
+          <View style={styles.cardAction}>
+            <Button label={`开始${selectedTemplate.name}`} onPress={startActivity} />
+          </View>
+        </>
+      ) : null}
+
+      {flow === "active" ? (
+        <View style={styles.activityFlowBox}>
+          <Text style={styles.activityFlowTitle}>怎么陪她做</Text>
+          {selectedTemplate.steps.map((step, index) => (
+            <View key={step} style={styles.activityStepRow}>
+              <View style={styles.activityStepIndex}>
+                <Text style={styles.activityStepIndexText}>{index + 1}</Text>
+              </View>
+              <Text style={styles.activityStepText}>{step}</Text>
+            </View>
+          ))}
+          <View style={styles.boundaryBox}>
+            <Text style={styles.boundaryText}>停止条件：出现烦躁、疲惫、抗拒或明显挫败时，直接停止，不需要完成所有步骤。</Text>
+          </View>
+          <Text style={styles.activityMemoryHint}>{selectedTemplate.memoryHint}</Text>
+          <View style={styles.activityActionRow}>
+            <Button label="完成活动" onPress={() => endActivity(false)} />
+            <Button label="提前停止" variant="secondary" onPress={() => endActivity(true)} />
+          </View>
+        </View>
+      ) : null}
+
+      {flow === "feedback" ? (
+        <View style={styles.activityFlowBox}>
+          <Text style={styles.activityFlowTitle}>记录刚才的反应</Text>
+          <Text style={styles.dimLabel}>参与意愿</Text>
+          <View style={styles.moodRow}>
+            {participationOptions.map((item) => (
+              <Choice key={item.value} label={item.label} active={participation === item.value} onPress={() => setParticipation(item.value)} />
+            ))}
+          </View>
+          <Text style={styles.dimLabel}>活动后情绪</Text>
+          <View style={styles.moodRow}>
+            {moodAfterOptions.map((item) => (
+              <Choice key={item.value} label={item.label} active={moodAfter === item.value} onPress={() => setMoodAfter(item.value)} />
+            ))}
+          </View>
+          <Text style={styles.dimLabel}>有没有这些情况？</Text>
+          <View style={styles.choiceRow}>
+            <Choice label="有挫败感" active={frustration} onPress={() => setFrustration((value) => !value)} />
+            <Choice label="看起来疲惫" active={fatigue} onPress={() => setFatigue((value) => !value)} />
+          </View>
+          <View style={styles.activityActionSingle}>
+            <Button label="保存活动反馈" disabled={!canSave} onPress={saveFeedback} />
+          </View>
+        </View>
+      ) : null}
+
+      {flow === "saved" ? (
+        <View style={styles.activityFlowBox}>
+          <Text style={styles.activityFlowTitle}>已保存陪伴反馈</Text>
+          <Text style={styles.body}>
+            {positiveFeedback
+              ? `这次活动看起来比较适合她。我已生成候选记忆，确认后之后会优先提醒你使用${selectedTemplate.name}。`
+              : "这次先不勉强。下次可以降低难度、缩短时间，或换成安静听音乐/一起坐一会儿。"}
+          </Text>
+          <View style={styles.activityActionSingle}>
+            <Button label="再做一次活动" variant="secondary" onPress={startActivity} />
+          </View>
+        </View>
+      ) : null}
+    </Card>
+  );
+}
+
 function PatientStatusBar({
   nickname,
   updatedAt,
@@ -79,7 +349,7 @@ function PatientStatusBar({
 }) {
   const highRisk = attentionItems.some((item) => item.severity === "high" || item.severity === "crisis");
   const hasAttention = attentionItems.length > 0;
-  const statusLabel = highRisk ? "需留意" : hasAttention ? "有待处理" : "平稳";
+  const statusLabel = highRisk ? "今晚留意" : hasAttention ? "有几件事" : "今天平稳";
   const statusStyle = highRisk ? styles.statusAlert : hasAttention ? styles.statusWatch : styles.statusCalm;
 
   return (
@@ -96,7 +366,7 @@ function PatientStatusBar({
       <View style={styles.statusContent}>
         <Text style={styles.statusName}>{nickname}</Text>
         <View style={styles.timeRow}>
-          <Clock3 color={colors.text.muted} size={14} />
+          <Moon color={colors.text.muted} size={14} />
           <Text style={styles.muted}>{updatedAt}</Text>
         </View>
       </View>
@@ -137,8 +407,8 @@ function PreviousDayFollowupCard({
   return (
     <Card tone="info">
       <View style={styles.headerRow}>
-        <Clock3 color={colors.status.info} size={20} />
-        <Text style={styles.cardTitle}>昨日行动追问</Text>
+        <Moon color={colors.status.info} size={20} />
+        <Text style={styles.cardTitle}>昨天建议的事，今天怎么样了？</Text>
       </View>
       {visibleFollowups.map((followup) => (
         <View key={`${followup.itemId}_${followup.actionId}`} style={styles.followupBlock}>
@@ -250,14 +520,14 @@ function CaregiverFourDimCheckin({ onSave }: { onSave: (checkin: CaregiverChecki
         <Text style={styles.cardTitle}>顺手记一下你的状态</Text>
       </View>
 
-      <Text style={styles.fieldLabel}>现在照护压力</Text>
+      <Text style={styles.dimLabel}>现在照护压力怎么样？</Text>
       <View style={styles.moodRow}>
         {pressureOptions.map((item) => (
           <Choice key={item.value} label={item.label} active={checkin.pressure === item.value} onPress={() => update({ pressure: item.value })} />
         ))}
       </View>
 
-      <Text style={styles.fieldLabel}>今天有没有人能搭把手？</Text>
+      <Text style={styles.dimLabel}>今天有没有人能搭把手？</Text>
       <View style={styles.choiceRow}>
         {supportOptions.map((item) => (
           <Choice
@@ -271,6 +541,7 @@ function CaregiverFourDimCheckin({ onSave }: { onSave: (checkin: CaregiverChecki
 
       {savedCheckin ? (
         <View style={styles.adviceBox}>
+          <View style={styles.adviceAccent} />
           <Text style={styles.adviceText}>{buildCaregiverAdvice(savedCheckin)}</Text>
         </View>
       ) : (
@@ -296,7 +567,7 @@ function MoodTrendChart({ checkins }: { checkins: CaregiverCheckinRecord[] }) {
   return (
     <Card>
       <View style={styles.headerRow}>
-        <LineChart color={colors.status.info} size={20} />
+        <TrendingUp color={colors.status.info} size={20} />
         <Text style={styles.cardTitle}>近 7 天你的状态</Text>
       </View>
       <View style={styles.trendWrap}>
@@ -363,7 +634,11 @@ function AttentionItemCard({
         style={styles.attentionHeader}
       >
         <View style={styles.attentionTitleRow}>
-          <AlertTriangle color={item.severity === "high" ? colors.status.alert : colors.status.watch} size={20} />
+          {item.severity === "high" ? (
+            <Bell color={colors.status.alert} size={20} />
+          ) : (
+            <Eye color={colors.status.watch} size={20} />
+          )}
           <Text style={styles.cardTitle}>{item.title}</Text>
         </View>
         <ChevronDown color={colors.text.secondary} size={20} />
@@ -373,7 +648,7 @@ function AttentionItemCard({
           <View style={styles.evidenceBox}>
             <Text style={styles.evidenceText}>触发依据：{item.evidence}</Text>
           </View>
-          <Text style={styles.fieldLabel}>勾选今晚能完成的事</Text>
+          <Text style={styles.dimLabel}>今晚能做到的话——</Text>
           {item.actions.map((action) => (
             <View key={action.id} style={styles.actionRow}>
               <Pressable
@@ -410,6 +685,7 @@ function AttentionItemCard({
       <Modal visible={blockedAction !== null} transparent animationType="slide" onRequestClose={() => setBlockedAction(null)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>为什么今晚做不到？</Text>
             {["只有我一个人", "老人不配合", "家里没有设备", "我太累了"].map((reason) => (
               <Pressable key={reason} accessibilityRole="button" onPress={() => block(reason)} style={styles.reasonButton}>
@@ -441,10 +717,87 @@ function buildPreviousDayFollowups(items: AttentionItem[]): FollowupAction[] {
     );
 }
 
+function dedupeTodayAttentionItems(items: AttentionItem[]) {
+  const priority = {
+    crisis: 4,
+    high: 3,
+    medium: 2,
+    low: 1
+  };
+  const byType = new Map<AttentionItem["type"], AttentionItem>();
+
+  for (const item of items) {
+    const existing = byType.get(item.type);
+    if (!existing) {
+      byType.set(item.type, item);
+      continue;
+    }
+
+    const itemPriority = priority[item.severity];
+    const existingPriority = priority[existing.severity];
+    const itemTime = new Date(item.createdAt).getTime();
+    const existingTime = new Date(existing.createdAt).getTime();
+
+    if (itemPriority > existingPriority || (itemPriority === existingPriority && itemTime > existingTime)) {
+      byType.set(item.type, item);
+    }
+  }
+
+  return Array.from(byType.values()).sort((a, b) => {
+    const priorityDiff = priority[b.severity] - priority[a.severity];
+    if (priorityDiff !== 0) return priorityDiff;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+function recommendCompanionActivity(
+  items: AttentionItem[],
+  checkins: CaregiverCheckinRecord[]
+): { type: CompanionActivityType; reason: string } {
+  const latestCheckin = checkins[0];
+  const highPressure = latestCheckin?.stressLevel === "high" || latestCheckin?.stressLevel === "crisis";
+  const highAttention = items.some((item) => item.severity === "high" || item.severity === "crisis");
+  const behaviorOrNightSignal = items.some((item) => item.type === "behavior" || item.type === "night_safety" || item.type === "wandering");
+
+  if (highPressure || highAttention || behaviorOrNightSignal) {
+    return {
+      type: "photo_reminiscence",
+      reason: "今天更适合熟悉、低刺激的陪伴方式，先帮助情绪稳定。"
+    };
+  }
+
+  if (items.length === 0 || latestCheckin?.stressLevel === "low") {
+    return {
+      type: "object_matching",
+      reason: "今天没有明显高风险记录，可以试一个短、轻、可随时停止的互动小游戏。"
+    };
+  }
+
+  return {
+    type: "familiar_sorting",
+    reason: "今天可以用熟悉物品做一点轻量参与，不需要完成任务或纠错。"
+  };
+}
+
 export function TodayCareScreen() {
-  const { patient, attentionItems, memoryItems, caregiverCheckins, updateActionStatus, saveCaregiverCheckin } = useCareMind();
+  const {
+    patient,
+    attentionItems,
+    memoryItems,
+    caregiverCheckins,
+    companionActivityRecords,
+    updateActionStatus,
+    saveCaregiverCheckin,
+    saveCompanionActivityFeedback,
+    trackEvent
+  } = useCareMind();
+  const visibleAttentionItems = useMemo(() => dedupeTodayAttentionItems(attentionItems), [attentionItems]);
   const effectiveMemory = memoryItems.find((item) => item.type === "effective_strategy" && item.status === "confirmed");
-  const previousDayFollowups = useMemo(() => buildPreviousDayFollowups(attentionItems), [attentionItems]);
+  const previousDayFollowups = useMemo(() => buildPreviousDayFollowups(visibleAttentionItems), [visibleAttentionItems]);
+  const recommendedActivity = useMemo(
+    () => recommendCompanionActivity(visibleAttentionItems, caregiverCheckins),
+    [visibleAttentionItems, caregiverCheckins]
+  );
 
   function updateAction(itemId: string, actionId: string, status: ActionStatus, reason?: string) {
     updateActionStatus(itemId, actionId, status, reason);
@@ -452,13 +805,23 @@ export function TodayCareScreen() {
 
   return (
     <Screen>
-      <PageHeader title="今日照护" subtitle={`${patient.nickname} · ${patient.updatedAt}`} />
-      <PatientStatusBar nickname={patient.nickname} updatedAt={patient.updatedAt} attentionItems={attentionItems} />
+      <PageHeader title="今日照护" subtitle="把零散照护记录整理成今晚行动与复诊材料" />
+      <PatientStatusBar nickname={patient.nickname} updatedAt={patient.updatedAt} attentionItems={visibleAttentionItems} />
       <PreviousDayFollowupCard followups={previousDayFollowups} onActionChange={updateAction} />
 
+      <SectionTitle title="今日陪伴" helper="低压力活动，不测试记忆" />
+      <CompanionActivityEntryCard
+        nickname={patient.nickname}
+        records={companionActivityRecords}
+        recommendedType={recommendedActivity.type}
+        recommendationReason={recommendedActivity.reason}
+        onSave={saveCompanionActivityFeedback}
+        onTrack={trackEvent}
+      />
+
       <SectionTitle title="今天值得关注" helper="只展示今晚最需要处理的事项" />
-      {attentionItems.length > 0 ? (
-        attentionItems.map((item) => <AttentionItemCard key={item.id} item={item} onActionChange={updateAction} />)
+      {visibleAttentionItems.length > 0 ? (
+        visibleAttentionItems.map((item) => <AttentionItemCard key={item.id} item={item} onActionChange={updateAction} />)
       ) : (
         <EmptyTodayCard />
       )}
@@ -480,15 +843,14 @@ export function TodayCareScreen() {
 const styles = StyleSheet.create({
   statusBar: {
     minHeight: 68,
-    borderRadius: 22,
+    borderRadius: 16,
     backgroundColor: colors.surface.card,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     padding: 12,
-    marginBottom: 12
+    marginBottom: 12,
+    ...shadow.card
   },
   statusAvatar: {
     width: 44,
@@ -523,8 +885,8 @@ const styles = StyleSheet.create({
   },
   statusBadgeText: {
     ...typography.small,
-    fontWeight: "800",
-    color: colors.text.primary
+    fontWeight: "700" as const,
+    color: colors.text.secondary
   },
   timeRow: {
     flexDirection: "row",
@@ -551,12 +913,152 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
     marginTop: 10
   },
+  recommendationBox: {
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: 10,
+    marginTop: 12
+  },
+  recommendationText: {
+    ...typography.helper,
+    color: colors.brand.primaryDark
+  },
+  activityLastBox: {
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: 10,
+    marginTop: 14
+  },
+  activityLastTitle: {
+    ...typography.small,
+    color: colors.brand.primaryDark,
+    fontWeight: "800" as const
+  },
+  activityLastText: {
+    ...typography.helper,
+    color: colors.text.primary,
+    marginTop: 3
+  },
+  activitySelector: {
+    gap: 8,
+    marginTop: 14
+  },
+  activityOption: {
+    minHeight: 64,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: "rgba(255,255,255,0.62)",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  activityOptionSelected: {
+    backgroundColor: colors.surface.card,
+    borderColor: colors.brand.primary
+  },
+  activityOptionTitle: {
+    ...typography.label,
+    color: colors.text.primary
+  },
+  activityOptionTitleSelected: {
+    color: colors.brand.primaryDark
+  },
+  activityOptionMeta: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginTop: 3
+  },
+  activityOptionMetaSelected: {
+    color: colors.brand.primaryDark
+  },
+  activityPreviewRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 14
+  },
+  activityPreviewChip: {
+    minHeight: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: "#BFE3D2"
+  },
+  activityPreviewText: {
+    ...typography.small,
+    color: colors.brand.primaryDark,
+    fontWeight: "800" as const
+  },
+  boundaryBox: {
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: 10,
+    marginTop: 14
+  },
+  activityFlowBox: {
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: 12,
+    marginTop: 14
+  },
+  activityFlowTitle: {
+    ...typography.label,
+    color: colors.text.primary
+  },
+  activityStepRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    marginTop: 12
+  },
+  activityStepIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.brand.primary
+  },
+  activityStepIndexText: {
+    ...typography.small,
+    color: colors.text.inverse,
+    fontWeight: "800" as const
+  },
+  activityStepText: {
+    ...typography.helper,
+    color: colors.text.primary,
+    flex: 1
+  },
+  activityMemoryHint: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginTop: 10
+  },
+  activityActionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 14
+  },
+  activityActionSingle: {
+    marginTop: 14
+  },
   cardAction: {
     marginTop: 14
   },
   followupBlock: {
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF99",
+    borderRadius: 14,
+    backgroundColor: colors.surface.muted,
     padding: 12,
     marginTop: 12
   },
@@ -578,6 +1080,13 @@ const styles = StyleSheet.create({
   fieldLabel: {
     ...typography.label,
     color: colors.text.primary,
+    marginTop: 16,
+    marginBottom: 8
+  },
+  dimLabel: {
+    ...typography.helper,
+    fontWeight: "600" as const,
+    color: colors.text.secondary,
     marginTop: 16,
     marginBottom: 8
   },
@@ -615,13 +1124,24 @@ const styles = StyleSheet.create({
   },
   adviceBox: {
     marginTop: 16,
-    borderRadius: 16,
-    backgroundColor: colors.statusSoft.watch,
-    padding: 12
+    borderRadius: 14,
+    backgroundColor: colors.surface.muted,
+    padding: 12,
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start"
+  },
+  adviceAccent: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: colors.brand.primary,
+    alignSelf: "stretch",
+    minHeight: 16
   },
   adviceText: {
     ...typography.helper,
-    color: colors.text.primary
+    color: colors.text.primary,
+    flex: 1
   },
   checkinAction: {
     marginTop: 14
@@ -654,8 +1174,8 @@ const styles = StyleSheet.create({
     gap: 8
   },
   evidenceBox: {
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF99",
+    borderRadius: 14,
+    backgroundColor: colors.surface.muted,
     padding: 12,
     marginTop: 14
   },
@@ -664,11 +1184,11 @@ const styles = StyleSheet.create({
     color: colors.text.primary
   },
   actionRow: {
-    minHeight: 50,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF88",
+    borderRadius: 14,
+    backgroundColor: colors.surface.muted,
     paddingHorizontal: 8,
     marginBottom: 8
   },
@@ -697,8 +1217,8 @@ const styles = StyleSheet.create({
     borderColor: colors.brand.primary
   },
   checkboxBlocked: {
-    backgroundColor: colors.status.alert,
-    borderColor: colors.status.alert
+    backgroundColor: colors.border.strong,
+    borderColor: colors.border.strong
   },
   actionLabel: {
     ...typography.helper,
@@ -706,7 +1226,7 @@ const styles = StyleSheet.create({
     flex: 1
   },
   blockedText: {
-    color: colors.status.alert
+    color: colors.text.secondary
   },
   blockButton: {
     minHeight: 40,
@@ -715,8 +1235,8 @@ const styles = StyleSheet.create({
   },
   blockButtonText: {
     ...typography.small,
-    fontWeight: "700",
-    color: colors.status.alert
+    fontWeight: "600" as const,
+    color: colors.text.muted
   },
   boundaryText: {
     ...typography.small,
@@ -735,6 +1255,14 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
     backgroundColor: colors.surface.card,
     ...shadow.sheet
+  },
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border.subtle,
+    alignSelf: "center",
+    marginBottom: 16
   },
   sheetTitle: {
     ...typography.cardTitle,

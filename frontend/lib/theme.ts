@@ -8,7 +8,8 @@ export const colors = {
     app: "#F7F4EE",
     card: "#FFFFFF",
     muted: "#F1EFE8",
-    elevated: "#FFFFFF"
+    elevated: "#FFFFFF",
+    info: "#FFF7EC"
   },
   text: {
     primary: "#1F2933",
@@ -35,11 +36,11 @@ export const colors = {
 } as const;
 
 export const radius = {
-  sm: 10,
-  md: 14,
-  lg: 16,
-  xl: 22,
-  xxl: 28
+  sm: 8,
+  md: 10,
+  lg: 12,
+  xl: 14,
+  xxl: 18
 } as const;
 
 export const spacing = {
@@ -58,14 +59,14 @@ export const hitSlop = {
 
 export const shadow = {
   card: {
-    shadowColor: "#2D2A26",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.06,
-    shadowRadius: 18,
+    shadowColor: "#3A2D23",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
     elevation: 2
   },
   sheet: {
-    shadowColor: "#2D2A26",
+    shadowColor: "#3A2D23",
     shadowOffset: { width: 0, height: -12 },
     shadowOpacity: 0.12,
     shadowRadius: 24,

@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
+import * as DocumentPicker from "expo-document-picker";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import {
@@ -9,11 +10,28 @@ import {
   ClipboardCheck,
   Download,
   FileText,
+  HelpCircle,
   ListChecks,
-  Stethoscope
+  Trash2,
+  UploadCloud
 } from "lucide-react-native";
-import type { AttentionItem, MemoryItem } from "../../types/caremind";
+import type {
+  AttentionItem,
+  FollowupDocumentRecord,
+  FollowupDocumentStatus,
+  FollowupDocumentType,
+  MemoryItem
+} from "../../types/caremind";
 import { useCareMind } from "../../lib/caremind-store";
+import {
+  deleteMedicalDocument,
+  confirmMedicalDocumentReview,
+  generateFollowupSummary,
+  getMedicalDocument,
+  parseMedicalDocument,
+  uploadMedicalDocument
+} from "../../lib/care-workflow-api";
+import type { FollowupSummaryResponse } from "../../types/care-workflow";
 import { colors, hitSlop, typography } from "../../lib/theme";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
@@ -26,25 +44,57 @@ import { MemoryUsedPill } from "../memory/MemoryUsedPill";
 type Range = "7d" | "30d" | "custom";
 
 const materials = ["近期用药清单", "近 7 天照护摘要", "MRI / CT 检查报告", "认知量表结果", "想问医生的问题"];
+const supportedMimeTypes = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+];
+const maxFileSize = 10 * 1024 * 1024;
+const supplementTypeOptions: { label: string; value: FollowupDocumentType }[] = [
+  { label: "病历摘要", value: "clinic_note" },
+  { label: "MRI / CT", value: "imaging_report" },
+  { label: "认知量表", value: "scale_result" },
+  { label: "用药清单", value: "medication_list" },
+  { label: "手动摘要", value: "manual_summary" }
+];
 
-const metricToneStyles = {
-  brand: {
-    backgroundColor: colors.statusSoft.calm,
-    borderColor: "#B8E6D4"
-  },
-  watch: {
-    backgroundColor: colors.statusSoft.watch,
-    borderColor: "#F4D18A"
-  },
-  alert: {
-    backgroundColor: colors.statusSoft.alert,
-    borderColor: "#F1B8A9"
-  },
-  info: {
-    backgroundColor: colors.statusSoft.info,
-    borderColor: "#BFDDF3"
-  }
-};
+function formatFileSize(size?: number) {
+  if (!size) return "大小未知";
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function isSupportedFile(asset: DocumentPicker.DocumentPickerAsset) {
+  const mimeType = asset.mimeType ?? "";
+  const fileName = asset.name.toLowerCase();
+  return (
+    supportedMimeTypes.includes(mimeType) ||
+    fileName.endsWith(".pdf") ||
+    fileName.endsWith(".jpg") ||
+    fileName.endsWith(".jpeg") ||
+    fileName.endsWith(".png") ||
+    fileName.endsWith(".docx")
+  );
+}
+
+function supplementStatusLabel(status: FollowupDocumentStatus) {
+  if (status === "uploading") return "上传中";
+  if (status === "parsing") return "整理中";
+  if (status === "review_required") return "待确认";
+  if (status === "reviewed") return "已确认";
+  if (status === "uploaded") return "已上传";
+  if (status === "failed") return "需处理";
+  return "已选择";
+}
+
+function supplementStatusTone(status: FollowupDocumentStatus) {
+  if (status === "reviewed") return "brand" as const;
+  if (status === "failed") return "watch" as const;
+  if (status === "review_required") return "watch" as const;
+  return "info" as const;
+}
+
 
 function buildDoctorQuestions(items: AttentionItem[]) {
   const questions = items.flatMap((item) => {
@@ -74,6 +124,21 @@ function buildSummaryBullets(items: AttentionItem[]) {
   return items.map((item) => `${item.title}：${item.evidence}`);
 }
 
+function buildConfirmedSupplementItems(supplements: FollowupDocumentRecord[]) {
+  return supplements
+    .filter((item) => item.status === "reviewed")
+    .flatMap((item) => {
+      if (item.confirmedItems?.length) {
+        return item.confirmedItems.map((entry) =>
+          entry.startsWith(`${item.title}：`) || entry.startsWith("已补充") || entry.startsWith("该资料")
+            ? entry
+            : `${item.title}：${entry}`
+        );
+      }
+      return item.summary ? [`${item.title}：${item.summary}`] : [`${item.title}：已由家属确认`];
+    });
+}
+
 function RangeSelector({ range, onChange }: { range: Range; onChange: (range: Range) => void }) {
   const options: { label: string; value: Range }[] = [
     { label: "近 7 天", value: "7d" },
@@ -99,6 +164,51 @@ function RangeSelector({ range, onChange }: { range: Range; onChange: (range: Ra
   );
 }
 
+function rangeLabel(range: Range) {
+  if (range === "30d") return "近 30 天";
+  if (range === "custom") return "自定义范围";
+  return "近 7 天";
+}
+
+function ReportSyncStatusCard({
+  loading,
+  error,
+  report
+}: {
+  loading: boolean;
+  error: string | null;
+  report: FollowupSummaryResponse | null;
+}) {
+  if (loading) {
+    return (
+      <Card tone="info">
+        <Text style={styles.cardTitle}>正在整理复诊摘要</Text>
+        <Text style={styles.body}>我会把已保存记录和已确认资料一起发送到摘要接口。</Text>
+      </Card>
+    );
+  }
+
+  if (report) {
+    return (
+      <Card tone="brand">
+        <Text style={styles.cardTitle}>复诊摘要已同步</Text>
+        <Text style={styles.body}>摘要已包含照护记录、已确认资料和医疗边界说明。</Text>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card tone="watch">
+        <Text style={styles.cardTitle}>当前使用本地摘要</Text>
+        <Text style={styles.body}>{error}</Text>
+      </Card>
+    );
+  }
+
+  return null;
+}
+
 function ProgressCard({ recordCount }: { recordCount: number }) {
   const progress = Math.min(recordCount / 3, 1);
   const title =
@@ -119,9 +229,9 @@ function ProgressCard({ recordCount }: { recordCount: number }) {
           : "你已经有足够的连续记录，可以导出更完整的复诊摘要。";
 
   return (
-    <Card tone={recordCount > 0 ? "brand" : "info"}>
+    <Card tone="default">
       <View style={styles.headerRow}>
-        <FileText color={recordCount > 0 ? colors.brand.primaryDark : colors.status.info} size={21} />
+        <FileText color={colors.brand.primaryDark} size={21} />
         <Text style={styles.cardTitle}>{title}</Text>
       </View>
       <Text style={styles.body}>{body}</Text>
@@ -137,38 +247,479 @@ function ProgressCard({ recordCount }: { recordCount: number }) {
   );
 }
 
-function MetricsGrid({ metrics }: { metrics: ReturnType<typeof useCareMind>["followupMetrics"] }) {
+function DocumentSupplementEntryCard() {
+  const { patient, followupDocuments: supplements, trackEvent, updateFollowupDocuments } = useCareMind();
+  const [selectedType, setSelectedType] = useState<FollowupDocumentType>("clinic_note");
+  const [manualSummary, setManualSummary] = useState("");
+
+  function selectedTypeLabel(type = selectedType) {
+    return supplementTypeOptions.find((item) => item.value === type)?.label ?? "复诊资料";
+  }
+
+  function setSupplements(updater: (current: FollowupDocumentRecord[]) => FollowupDocumentRecord[]) {
+    updateFollowupDocuments(updater);
+  }
+
+  async function pickDocument() {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          "application/pdf",
+          "image/jpeg",
+          "image/png",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ],
+        copyToCacheDirectory: true,
+        multiple: false
+      });
+
+      if (result.canceled || !result.assets[0]) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      if (!isSupportedFile(asset)) {
+        const now = new Date().toISOString();
+        setSupplements((current) => [
+          {
+            id: `supplement_failed_${Date.now()}`,
+            patientId: patient.id,
+            type: selectedType,
+            title: selectedTypeLabel(),
+            filename: asset.name,
+            mimeType: asset.mimeType,
+            size: asset.size,
+            summary: manualSummary.trim(),
+            status: "failed",
+            error: "暂只支持 PDF、JPG、PNG、DOCX。",
+            createdAt: now,
+            updatedAt: now
+          },
+          ...current
+        ]);
+        return;
+      }
+
+      if (asset.size && asset.size > maxFileSize) {
+        const now = new Date().toISOString();
+        setSupplements((current) => [
+          {
+            id: `supplement_failed_${Date.now()}`,
+            patientId: patient.id,
+            type: selectedType,
+            title: selectedTypeLabel(),
+            filename: asset.name,
+            mimeType: asset.mimeType,
+            size: asset.size,
+            summary: manualSummary.trim(),
+            status: "failed",
+            error: "文件超过 10MB，建议压缩后再上传。",
+            createdAt: now,
+            updatedAt: now
+          },
+          ...current
+        ]);
+        return;
+      }
+
+      const localId = `supplement_${Date.now()}`;
+      const createdAt = new Date().toISOString();
+      trackEvent("document_upload_started", {
+        document_type: selectedType,
+        has_summary: !!manualSummary.trim()
+      });
+      setSupplements((current) => [
+        {
+          id: localId,
+          patientId: patient.id,
+          type: selectedType,
+          title: selectedTypeLabel(),
+          filename: asset.name,
+          mimeType: asset.mimeType,
+          size: asset.size,
+          summary: manualSummary.trim(),
+          status: "uploading",
+          createdAt,
+          updatedAt: createdAt
+        },
+        ...current
+      ]);
+
+      let uploadedDocumentId: string | null = null;
+      try {
+        const uploaded = await uploadMedicalDocument({
+          patientId: patient.id,
+          documentType: selectedType,
+          summary: manualSummary.trim(),
+          asset: {
+            uri: asset.uri,
+            name: asset.name,
+            mimeType: asset.mimeType
+          }
+        });
+        uploadedDocumentId = uploaded.document_id;
+        trackEvent("document_upload_succeeded", {
+          document_id: uploaded.document_id,
+          document_type: uploaded.document_type,
+          file_size: uploaded.file_size
+        });
+        const statusRecord = await getMedicalDocument(uploaded.document_id);
+        setSupplements((current) =>
+          current.map((item) =>
+            item.id === localId
+              ? {
+                  ...item,
+                  documentId: statusRecord.document_id,
+                  status: statusRecord.status === "deleted" ? "failed" : "parsing",
+                  filename: statusRecord.filename,
+                  mimeType: statusRecord.mime_type,
+                  size: statusRecord.file_size,
+                  error: statusRecord.status === "deleted" ? "资料已删除。" : undefined,
+                  updatedAt: new Date().toISOString()
+                }
+              : item
+          )
+        );
+
+        trackEvent("document_parse_started", {
+          document_id: uploaded.document_id,
+          document_type: uploaded.document_type
+        });
+        const parseResult = await parseMedicalDocument(uploaded.document_id);
+        if (parseResult.status === "parse_failed") {
+          trackEvent("document_parse_failed", {
+            document_id: uploaded.document_id,
+            reason: parseResult.parse_error ?? "unknown"
+          });
+          setSupplements((current) =>
+            current.map((item) =>
+              item.id === localId
+                ? {
+                    ...item,
+                    status: "failed",
+                    parseResult,
+                    error: parseResult.parse_error ?? "资料整理失败，请改为手动填写摘要。",
+                    updatedAt: new Date().toISOString()
+                  }
+                : item
+            )
+          );
+          return;
+        }
+
+        trackEvent("document_parse_succeeded", {
+          document_id: uploaded.document_id,
+          field_count: parseResult.extracted_fields.length,
+          question_count: parseResult.review_questions.length
+        });
+        setSupplements((current) =>
+          current.map((item) =>
+            item.id === localId
+              ? {
+                  ...item,
+                  status: "review_required",
+                  parseResult,
+                  error: undefined,
+                  updatedAt: new Date().toISOString()
+                }
+              : item
+          )
+        );
+        setManualSummary("");
+      } catch (error) {
+        if (uploadedDocumentId) {
+          trackEvent("document_parse_failed", {
+            document_id: uploadedDocumentId,
+            reason: error instanceof Error ? error.message : "unknown"
+          });
+        } else {
+          trackEvent("document_upload_failed", {
+            document_type: selectedType,
+            reason: error instanceof Error ? error.message : "unknown"
+          });
+        }
+        setSupplements((current) =>
+          current.map((item) =>
+            item.id === localId
+              ? {
+                  ...item,
+                  status: "failed",
+                  error: error instanceof Error ? error.message : "资料上传失败，请稍后重试。",
+                  updatedAt: new Date().toISOString()
+                }
+              : item
+          )
+        );
+      }
+    } catch {
+      const now = new Date().toISOString();
+      setSupplements((current) => [
+        {
+          id: `supplement_failed_${Date.now()}`,
+          patientId: patient.id,
+          type: selectedType,
+          title: selectedTypeLabel(),
+          summary: manualSummary.trim(),
+          status: "failed",
+          error: "无法打开文件选择器，请稍后重试。",
+          createdAt: now,
+          updatedAt: now
+        },
+        ...current
+      ]);
+    }
+  }
+
+  function addManualSummary() {
+    const summary = manualSummary.trim();
+    if (!summary) {
+      Alert.alert("先写一点摘要", "可以只写医生说明、当前用药、检查类型或家属想问医生的问题。");
+      return;
+    }
+
+    setSupplements((current) => [
+      {
+        id: `manual_supplement_${Date.now()}`,
+        patientId: patient.id,
+        type: selectedType,
+        title: selectedTypeLabel(),
+        summary,
+        status: "reviewed",
+        confirmedItems: [`家属手动补充：${summary}`],
+        reviewedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      ...current
+    ]);
+    trackEvent("document_review_confirmed", {
+      document_type: selectedType,
+      source: "manual_summary"
+    });
+    setManualSummary("");
+  }
+
+  async function removeSupplement(item: FollowupDocumentRecord) {
+    if (item.documentId) {
+      try {
+        await deleteMedicalDocument(item.documentId);
+      } catch (error) {
+        Alert.alert("删除失败", error instanceof Error ? error.message : "后端删除失败，请稍后重试。");
+        return;
+      }
+    }
+    setSupplements((current) => current.filter((entry) => entry.id !== item.id));
+    trackEvent("document_deleted", {
+      document_id: item.documentId ?? item.id,
+      document_type: item.type
+    });
+  }
+
+  async function confirmSupplementReview(item: FollowupDocumentRecord) {
+    if (!item.documentId || !item.parseResult) {
+      return;
+    }
+
+    try {
+      const response = await confirmMedicalDocumentReview({
+        documentId: item.documentId,
+        confirmedItems: item.parseResult.followup_summary_items,
+        familyNote: item.summary
+      });
+      setSupplements((current) =>
+        current.map((entry) =>
+          entry.id === item.id
+            ? {
+                ...entry,
+                status: "reviewed",
+                confirmedItems: response.confirmed_items,
+                reviewedAt: response.reviewed_at,
+                error: undefined,
+                updatedAt: new Date().toISOString()
+              }
+            : entry
+        )
+      );
+      trackEvent("document_review_confirmed", {
+        document_id: item.documentId,
+        document_type: item.type,
+        confirmed_count: response.confirmed_items.length
+      });
+    } catch (error) {
+      setSupplements((current) =>
+        current.map((entry) =>
+          entry.id === item.id
+            ? {
+                ...entry,
+                error: error instanceof Error ? error.message : "资料确认失败，请稍后重试。",
+                updatedAt: new Date().toISOString()
+              }
+            : entry
+        )
+      );
+    }
+  }
+
   return (
-    <View style={styles.metricsGrid}>
-      {metrics.map((metric) => (
-        <View key={metric.label} style={[styles.metricSurface, metricToneStyles[metric.tone]]}>
-          <Text style={styles.metricValue}>{metric.value}</Text>
-          <Text style={styles.metricLabel}>{metric.label}</Text>
-          <Text style={styles.metricHelper}>{metric.helper}</Text>
+    <Card tone="info">
+      <View style={styles.headerRow}>
+        <FileText color={colors.status.info} size={21} />
+        <Text style={styles.cardTitle}>复诊资料补充</Text>
+      </View>
+      <Text style={styles.body}>把病历、检查报告、认知量表、用药清单或家属手动摘要放在这里，之后会和近期照护记录一起进入复诊材料。</Text>
+      <View style={styles.documentChipRow}>
+        {supplementTypeOptions.map((item) => {
+          const selected = selectedType === item.value;
+          return (
+            <Pressable
+              key={item.value}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              hitSlop={hitSlop}
+              onPress={() => setSelectedType(item.value)}
+              style={[styles.documentChip, selected && styles.documentChipSelected]}
+            >
+              <Text style={[styles.documentChipText, selected && styles.documentChipTextSelected]}>{item.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Text style={styles.formLabel}>资料摘要</Text>
+      <TextInput
+        accessibilityLabel="复诊资料摘要"
+        multiline
+        value={manualSummary}
+        onChangeText={setManualSummary}
+        placeholder="例如：当前用药、上次医生说明、检查类型、家属想问医生的问题"
+        placeholderTextColor={colors.text.muted}
+        style={styles.summaryInput}
+        textAlignVertical="top"
+      />
+
+      <View style={styles.documentBoundaryBox}>
+        <Text style={styles.documentBoundaryText}>
+          上传资料可能包含敏感健康信息。CareMind 只做资料整理和术语辅助，不判断是否需要检查，也不调整用药。
+        </Text>
+      </View>
+
+      <View style={styles.documentActions}>
+        <Button label="选择文件" icon={<UploadCloud color="#FFFFFF" size={19} />} onPress={pickDocument} />
+        <Button label="只保存摘要" variant="secondary" onPress={addManualSummary} />
+      </View>
+
+      {supplements.length > 0 ? (
+        <View style={styles.supplementList}>
+          {supplements.map((item) => (
+            <View key={item.id} style={[styles.supplementItem, item.status === "failed" && styles.supplementItemFailed]}>
+              <View style={styles.supplementMain}>
+                <View style={styles.supplementHeader}>
+                  <Text style={styles.supplementTitle}>{item.title}</Text>
+                  <Pill label={supplementStatusLabel(item.status)} tone={supplementStatusTone(item.status)} />
+                </View>
+                {item.filename ? (
+                  <Text style={styles.supplementMeta}>
+                    {item.filename} · {formatFileSize(item.size)}
+                  </Text>
+                ) : (
+                  <Text style={styles.supplementMeta}>手动填写摘要</Text>
+                )}
+                {item.summary ? <Text style={styles.supplementSummary}>{item.summary}</Text> : null}
+                {item.error ? <Text style={styles.supplementError}>{item.error}</Text> : null}
+                {item.parseResult ? (
+                  <View style={styles.parseBox}>
+                    <Text style={styles.parseTitle}>CareMind 整理草稿</Text>
+                    <View style={styles.parseFieldList}>
+                      {item.parseResult.extracted_fields.map((field) => (
+                        <View key={`${item.id}_${field.field}`} style={styles.parseFieldRow}>
+                          <Text style={styles.parseFieldLabel}>{field.label}</Text>
+                          <Text style={styles.parseFieldValue}>{field.value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <Text style={styles.parseTitle}>需要核对</Text>
+                    {item.parseResult.review_questions.map((question) => (
+                      <Text key={`${item.id}_${question.id}`} style={styles.reviewQuestion}>
+                        - {question.question}
+                      </Text>
+                    ))}
+                    <Text style={styles.boundaryText}>{item.parseResult.medical_boundary}</Text>
+                    {item.status === "review_required" ? (
+                      <View style={styles.reviewAction}>
+                        <Button
+                          label="确认并用于复诊"
+                          variant="secondary"
+                          onPress={() => void confirmSupplementReview(item)}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
+                {item.confirmedItems?.length ? (
+                  <View style={styles.confirmedBox}>
+                    <Text style={styles.confirmedTitle}>已进入复诊材料</Text>
+                    {item.confirmedItems.map((entry) => (
+                      <Text key={`${item.id}_${entry}`} style={styles.confirmedItem}>
+                        - {entry}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`删除${item.title}`}
+                hitSlop={hitSlop}
+                onPress={() => void removeSupplement(item)}
+                style={styles.deleteButton}
+              >
+                <Trash2 color={colors.text.secondary} size={18} />
+              </Pressable>
+            </View>
+          ))}
         </View>
-      ))}
-    </View>
+      ) : null}
+    </Card>
   );
 }
 
-function ClinicalSummarySheet({ recordCount, attentionItems }: { recordCount: number; attentionItems: AttentionItem[] }) {
-  const summaryBullets = buildSummaryBullets(attentionItems);
+function MetricsGrid({ metrics }: { metrics: ReturnType<typeof useCareMind>["followupMetrics"] }) {
+  return (
+    <Card>
+      {metrics.map((metric, index) => (
+        <View key={metric.label}>
+          <View style={styles.metricRow}>
+            <View style={styles.metricRowLeft}>
+              <Text style={styles.metricLabel}>{metric.label}</Text>
+              <Text style={styles.metricHelper}>{metric.helper}</Text>
+            </View>
+            <Text style={[styles.metricValue, metric.tone === "watch" && styles.metricValueWatch, metric.tone === "alert" && styles.metricValueAlert]}>
+              {metric.value}
+            </Text>
+          </View>
+          {index < metrics.length - 1 ? <View style={styles.metricDivider} /> : null}
+        </View>
+      ))}
+    </Card>
+  );
+}
 
+function ClinicalSummarySheet({ recordCount, summaryBullets }: { recordCount: number; summaryBullets: string[] }) {
   return (
     <Card>
       <View style={styles.reportHeader}>
         <View style={styles.reportTitleBlock}>
-          <Text style={styles.reportTitle}>照护摘要报告</Text>
-          <Text style={styles.reportSubtitle}>家属记录整理 · 不包含医生诊断</Text>
+          <Text style={styles.reportTitle}>家属照护记录</Text>
+          <Text style={styles.reportSubtitle}>家属整理 · 不包含医生诊断</Text>
         </View>
         <Pill label={recordCount >= 7 ? "CareMind" : "数据积累中"} tone={recordCount >= 7 ? "brand" : "watch"} />
       </View>
       <View style={styles.rule} />
-      <Text style={styles.reportSectionTitle}>一、照护记录概况</Text>
-      <Text style={styles.reportBullet}>- 已保存 {recordCount} 条家庭照护记录。</Text>
-      <Text style={styles.reportBullet}>- 以下内容来自家属自行输入、保存和确认的照护记录。</Text>
+      <Text style={styles.reportSectionTitle}>照护概况</Text>
+      <Text style={styles.reportBullet}>已保存 {recordCount} 条家庭照护记录。</Text>
+      <Text style={styles.reportBullet}>以下内容来自家属自行输入、保存和确认的照护记录。</Text>
 
-      <Text style={styles.reportSectionTitle}>二、主要变化摘要</Text>
+      <Text style={styles.reportSectionTitle}>近期变化</Text>
       {summaryBullets.map((bullet) => (
         <Text key={bullet} style={styles.reportBullet}>
           - {bullet}
@@ -246,11 +797,23 @@ function ChecklistCard({
   );
 }
 
-function reportHtml(recordCount: number, attentionItems: AttentionItem[], memories: MemoryItem[]) {
-  const questions = buildDoctorQuestions(attentionItems);
-  const summaryBullets = buildSummaryBullets(attentionItems);
-  const triedStrategies = memories.filter((item) => item.status === "confirmed").map((item) => item.title);
-
+function reportHtml({
+  recordCount,
+  summaryBullets,
+  questions,
+  materialItems,
+  triedStrategies,
+  rangeLabel,
+  generatedAt
+}: {
+  recordCount: number;
+  summaryBullets: string[];
+  questions: string[];
+  materialItems: string[];
+  triedStrategies: string[];
+  rangeLabel: string;
+  generatedAt: string;
+}) {
   return `
     <html>
       <head>
@@ -265,8 +828,8 @@ function reportHtml(recordCount: number, attentionItems: AttentionItem[], memori
         </style>
       </head>
       <body>
-        <h1>CareMind 近 7 天照护摘要</h1>
-        <div class="note">本摘要为家属照护记录整理，不包含医生诊断。</div>
+        <h1>CareMind ${rangeLabel}照护摘要</h1>
+        <div class="note">本摘要为家属照护记录整理，不包含医生诊断。生成时间：${generatedAt}</div>
         <h2>一、照护记录概况</h2>
         <ul>
           <li>已保存 ${recordCount} 条家庭照护记录。</li>
@@ -286,7 +849,7 @@ function reportHtml(recordCount: number, attentionItems: AttentionItem[], memori
         </ul>
         <h2>五、复诊资料清单</h2>
         <ul>
-          ${materials.map((item) => `<li>${item}</li>`).join("")}
+          ${materialItems.map((item) => `<li>${item}</li>`).join("")}
         </ul>
         <div class="footer">影像、量表、诊断和用药结论需由医生判断。由家属自行决定是否分享给医生。</div>
       </body>
@@ -295,21 +858,136 @@ function reportHtml(recordCount: number, attentionItems: AttentionItem[], memori
 }
 
 export function FollowupPrepScreen() {
-  const { patient, recordCount, followupMetrics, memoryItems, attentionItems } = useCareMind();
+  const { patient, recordCount, followupMetrics, memoryItems, attentionItems, followupDocuments, trackEvent } = useCareMind();
   const [range, setRange] = useState<Range>("7d");
   const [exporting, setExporting] = useState(false);
-  const doctorQuestions = useMemo(() => buildDoctorQuestions(attentionItems), [attentionItems]);
+  const [report, setReport] = useState<FollowupSummaryResponse | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const reviewedFollowupDocuments = useMemo(
+    () => followupDocuments.filter((item) => item.status === "reviewed"),
+    [followupDocuments]
+  );
+  const confirmedSupplementItems = useMemo(() => buildConfirmedSupplementItems(reviewedFollowupDocuments), [reviewedFollowupDocuments]);
+  const localQuestions = useMemo(() => buildDoctorQuestions(attentionItems), [attentionItems]);
+  const localSummaryBullets = useMemo(() => buildSummaryBullets(attentionItems), [attentionItems]);
+  const localTriedStrategies = useMemo(
+    () => memoryItems.filter((item) => item.status === "confirmed").map((item) => item.title),
+    [memoryItems]
+  );
+  const doctorQuestions = report?.followup_patch.doctor_questions.length ? report.followup_patch.doctor_questions : localQuestions;
+  const summaryBullets = report?.followup_patch.summary_bullets.length ? report.followup_patch.summary_bullets : localSummaryBullets;
+  const triedStrategies = report?.tried_strategies.length ? report.tried_strategies : localTriedStrategies;
+  const materialItems = report?.followup_patch.materials_to_bring.length
+    ? report.followup_patch.materials_to_bring
+    : [...materials, ...confirmedSupplementItems];
+  const displayMetrics = report?.metrics.length ? report.metrics : followupMetrics;
+  const hasReportContent = recordCount > 0 || reviewedFollowupDocuments.length > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (recordCount <= 0 && reviewedFollowupDocuments.length === 0) {
+      setReport(null);
+      setReportError(null);
+      setReportLoading(false);
+      return;
+    }
+
+    async function loadReport() {
+      try {
+        setReportLoading(true);
+        setReportError(null);
+        const response = await generateFollowupSummary({
+          patientId: patient.id,
+          caregiverId: "local_caregiver",
+          dateRange: range,
+          recordCount,
+          attentionItems,
+          memoryItems,
+          followupDocuments: reviewedFollowupDocuments
+        });
+
+        if (cancelled) return;
+        setReport(response);
+        trackEvent("followup_report_loaded", {
+          range,
+          record_count: recordCount,
+          attention_count: attentionItems.length,
+          document_count: reviewedFollowupDocuments.length,
+          source: "backend"
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setReport(null);
+        setReportError(error instanceof Error ? error.message : "复诊摘要接口暂不可用，当前展示本地摘要。");
+        trackEvent("followup_report_failed", {
+          range,
+          record_count: recordCount,
+          document_count: reviewedFollowupDocuments.length,
+          reason: error instanceof Error ? error.message : "unknown"
+        });
+      } finally {
+        if (!cancelled) {
+          setReportLoading(false);
+        }
+      }
+    }
+
+    void loadReport();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attentionItems, memoryItems, patient.id, range, recordCount, reviewedFollowupDocuments, trackEvent]);
+
+  function handleRangeChange(nextRange: Range) {
+    setRange(nextRange);
+    trackEvent("followup_range_changed", {
+      range: nextRange,
+      record_count: recordCount,
+      document_count: reviewedFollowupDocuments.length
+    });
+  }
 
   async function exportPdf() {
     try {
       setExporting(true);
-      const { uri } = await Print.printToFileAsync({ html: reportHtml(recordCount, attentionItems, memoryItems) });
+      trackEvent("pdf_export_started", {
+        range,
+        record_count: recordCount,
+        document_count: reviewedFollowupDocuments.length,
+        report_source: report ? "backend" : "local"
+      });
+      const { uri } = await Print.printToFileAsync({
+        html: reportHtml({
+          recordCount,
+          summaryBullets,
+          questions: doctorQuestions,
+          materialItems,
+          triedStrategies,
+          rangeLabel: rangeLabel(range),
+          generatedAt: report?.generated_at ?? new Date().toLocaleString("zh-CN", { hour12: false })
+        })
+      });
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri);
       } else {
         Alert.alert("PDF 已生成", uri);
       }
-    } catch {
+      trackEvent("pdf_export_succeeded", {
+        range,
+        record_count: recordCount,
+        document_count: reviewedFollowupDocuments.length,
+        report_source: report ? "backend" : "local"
+      });
+    } catch (error) {
+      trackEvent("pdf_export_failed", {
+        range,
+        record_count: recordCount,
+        document_count: reviewedFollowupDocuments.length,
+        reason: error instanceof Error ? error.message : "unknown"
+      });
       Alert.alert("PDF 生成失败", "你可以先复制页面文字，之后再重试导出。");
     } finally {
       setExporting(false);
@@ -318,33 +996,36 @@ export function FollowupPrepScreen() {
 
   return (
     <Screen bottomInset={128}>
-      <PageHeader title="复诊准备" subtitle={`${patient.nickname} · 家属记录整理`} />
-      {recordCount > 0 ? <MemoryUsedPill label="已读取已保存记录和已记住的方法" /> : null}
+      <PageHeader title="复诊准备" subtitle="把照护记录和复诊资料整理成医生能看的摘要" />
+      {hasReportContent ? <MemoryUsedPill label="已读取已保存记录、已记住方法和已确认资料" /> : null}
       <View style={styles.spacer} />
+      <SectionTitle title="复诊资料补充" helper="上传资料或手动填写摘要" />
+      <DocumentSupplementEntryCard />
       <ProgressCard recordCount={recordCount} />
-      {recordCount >= 3 ? <RangeSelector range={range} onChange={setRange} /> : null}
+      {recordCount >= 3 ? <RangeSelector range={range} onChange={handleRangeChange} /> : null}
 
-      {recordCount > 0 ? (
+      {hasReportContent ? (
         <>
-          <SectionTitle title="核心指标" />
-          <MetricsGrid metrics={followupMetrics} />
-          <ClinicalSummarySheet recordCount={recordCount} attentionItems={attentionItems} />
+          <ReportSyncStatusCard loading={reportLoading} error={reportError} report={report} />
+          <SectionTitle title="近期情况" />
+          <MetricsGrid metrics={displayMetrics} />
+          <ClinicalSummarySheet recordCount={recordCount} summaryBullets={summaryBullets} />
           <TriedStrategiesCard confirmedMemories={memoryItems.filter((item) => item.status === "confirmed")} />
           <ChecklistCard
             title="建议复诊时问医生"
-            icon={<Stethoscope color={colors.brand.primaryDark} size={21} />}
+            icon={<HelpCircle color={colors.brand.primaryDark} size={21} />}
             items={doctorQuestions}
             emptyText="记录更多事件后，问题清单会自动生成。"
           />
-          <ChecklistCard title="复诊资料清单" icon={<ListChecks color={colors.status.info} size={21} />} items={materials} />
+          <ChecklistCard title="复诊资料清单" icon={<ListChecks color={colors.status.info} size={21} />} items={materialItems} />
           <View style={styles.exportWrap}>
+            <Text style={styles.exportNote}>本摘要为家属照护记录整理，不包含医生诊断。</Text>
             <Button
-              label="导出复诊摘要 PDF"
+              label="导出复诊材料"
               loading={exporting}
               icon={<Download color="#FFFFFF" size={19} />}
               onPress={exportPdf}
             />
-            <Text style={styles.exportNote}>本摘要为家属照护记录整理，不包含医生诊断。</Text>
           </View>
         </>
       ) : null}
@@ -374,7 +1055,7 @@ const styles = StyleSheet.create({
   progressTrack: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#FFFFFF99",
+    backgroundColor: colors.border.subtle,
     marginTop: 14,
     overflow: "hidden"
   },
@@ -384,6 +1065,183 @@ const styles = StyleSheet.create({
   },
   progressAction: {
     marginTop: 14
+  },
+  documentChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 14
+  },
+  documentChip: {
+    minHeight: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: "#C7DDED"
+  },
+  documentChipSelected: {
+    backgroundColor: colors.status.info,
+    borderColor: colors.status.info
+  },
+  documentChipText: {
+    ...typography.small,
+    color: colors.status.info,
+    fontWeight: "800" as const
+  },
+  documentChipTextSelected: {
+    color: colors.text.inverse
+  },
+  formLabel: {
+    ...typography.label,
+    color: colors.text.primary,
+    marginTop: 16,
+    marginBottom: 8
+  },
+  summaryInput: {
+    minHeight: 92,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    padding: 12,
+    ...typography.helper,
+    color: colors.text.primary
+  },
+  documentBoundaryBox: {
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: "#C7DDED",
+    padding: 10,
+    marginTop: 14
+  },
+  documentBoundaryText: {
+    ...typography.small,
+    color: colors.text.secondary
+  },
+  documentActions: {
+    gap: 8,
+    marginTop: 14
+  },
+  supplementList: {
+    gap: 10,
+    marginTop: 14
+  },
+  supplementItem: {
+    minHeight: 82,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.surface.card,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: 12
+  },
+  supplementItemFailed: {
+    borderColor: "#F2CF86",
+    backgroundColor: colors.statusSoft.watch
+  },
+  supplementMain: {
+    flex: 1
+  },
+  supplementHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10
+  },
+  supplementTitle: {
+    ...typography.label,
+    color: colors.text.primary,
+    flex: 1
+  },
+  supplementMeta: {
+    ...typography.small,
+    color: colors.text.muted,
+    marginTop: 4
+  },
+  supplementSummary: {
+    ...typography.helper,
+    color: colors.text.secondary,
+    marginTop: 7
+  },
+  supplementError: {
+    ...typography.small,
+    color: colors.status.watch,
+    marginTop: 7
+  },
+  parseBox: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.surface.muted,
+    padding: 10,
+    marginTop: 10
+  },
+  parseTitle: {
+    ...typography.small,
+    color: colors.text.primary,
+    fontWeight: "800" as const,
+    marginBottom: 6
+  },
+  parseFieldList: {
+    gap: 6,
+    marginBottom: 10
+  },
+  parseFieldRow: {
+    borderRadius: 12,
+    backgroundColor: colors.surface.card,
+    padding: 9
+  },
+  parseFieldLabel: {
+    ...typography.small,
+    color: colors.text.muted
+  },
+  parseFieldValue: {
+    ...typography.helper,
+    color: colors.text.primary,
+    marginTop: 2
+  },
+  reviewQuestion: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginBottom: 4
+  },
+  boundaryText: {
+    ...typography.small,
+    color: colors.text.muted,
+    marginTop: 8
+  },
+  reviewAction: {
+    marginTop: 10
+  },
+  confirmedBox: {
+    borderRadius: 14,
+    backgroundColor: colors.brand.primarySoft,
+    padding: 10,
+    marginTop: 10
+  },
+  confirmedTitle: {
+    ...typography.small,
+    color: colors.brand.primaryDark,
+    fontWeight: "800" as const,
+    marginBottom: 4
+  },
+  confirmedItem: {
+    ...typography.small,
+    color: colors.brand.primaryDark,
+    marginTop: 3
+  },
+  deleteButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface.muted
   },
   segmented: {
     minHeight: 48,
@@ -412,33 +1270,20 @@ const styles = StyleSheet.create({
   segmentTextActive: {
     color: colors.text.primary
   },
-  metricsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10
-  },
-  metricSurface: {
-    width: "47.8%",
-    minHeight: 112,
-    padding: 14,
-    justifyContent: "center",
-    borderRadius: 22,
-    borderWidth: 1
-  },
   metricValue: {
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: "800",
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: "700" as const,
     color: colors.text.primary
   },
   metricLabel: {
-    ...typography.label,
-    color: colors.text.primary,
-    marginTop: 4
+    ...typography.helper,
+    color: colors.text.secondary,
+    fontWeight: "500" as const
   },
   metricHelper: {
     ...typography.small,
-    color: colors.text.secondary,
+    color: colors.text.muted,
     marginTop: 2
   },
   reportHeader: {
@@ -502,7 +1347,7 @@ const styles = StyleSheet.create({
   checkbox: {
     width: 26,
     height: 26,
-    borderRadius: 8,
+    borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
@@ -523,7 +1368,28 @@ const styles = StyleSheet.create({
   },
   exportNote: {
     ...typography.small,
-    textAlign: "center",
-    color: colors.text.secondary
+    textAlign: "left",
+    color: colors.text.muted,
+    marginBottom: 8
+  },
+  metricRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    gap: 12
+  },
+  metricRowLeft: {
+    flex: 1
+  },
+  metricDivider: {
+    height: 1,
+    backgroundColor: colors.border.subtle
+  },
+  metricValueWatch: {
+    color: colors.status.watch
+  },
+  metricValueAlert: {
+    color: colors.status.alert
   }
 });

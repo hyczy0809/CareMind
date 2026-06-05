@@ -22,7 +22,12 @@ export function Button({
   accessibilityLabel
 }: ButtonProps) {
   const variantStyle = styles[variant];
-  const labelStyle = variant === "primary" || variant === "danger" ? styles.lightLabel : styles.darkLabel;
+  const labelStyle =
+    variant === "primary" || variant === "danger"
+      ? styles.lightLabel
+      : variant === "ghost"
+        ? styles.ghostLabel
+        : styles.darkLabel;
 
   return (
     <Pressable
@@ -50,33 +55,37 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 52,
+    minHeight: 50,
     borderRadius: radius.lg,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 8,
-    paddingHorizontal: 16
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: "transparent"
   },
   primary: {
-    backgroundColor: colors.brand.primary
+    backgroundColor: colors.brand.primary,
+    borderColor: colors.brand.primary
   },
   secondary: {
     backgroundColor: colors.brand.primarySoft,
-    borderWidth: 1,
-    borderColor: "#B8E6D4"
+    borderColor: "#BFE3D2"
   },
   ghost: {
-    backgroundColor: colors.surface.muted
+    backgroundColor: "transparent",
+    borderColor: colors.border.subtle
   },
   danger: {
-    backgroundColor: colors.status.alert
+    backgroundColor: colors.status.alert,
+    borderColor: colors.status.alert
   },
   disabled: {
-    opacity: 0.48
+    opacity: 0.50
   },
   pressed: {
-    transform: [{ scale: 0.98 }]
+    opacity: 0.86
   },
   label: {
     ...typography.label
@@ -86,6 +95,9 @@ const styles = StyleSheet.create({
   },
   darkLabel: {
     color: colors.text.primary
+  },
+  ghostLabel: {
+    color: colors.text.secondary
   },
   icon: {
     width: 20,

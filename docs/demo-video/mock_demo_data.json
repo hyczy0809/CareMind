@@ -1,0 +1,124 @@
+{
+  "_note": "以下全部为虚构演示数据，不含任何真实患者、家属或医疗信息。仅用于产品演示。",
+  "patient": {
+    "nickname": "妈妈",
+    "age_note": "70多岁，失智症相关照护",
+    "condition_note": "家属记录：医生建议观察记忆退化情况，目前以家庭照护为主",
+    "medication_note": "晚饭后服药（药名保密），近一周出现 2 次拒药",
+    "preferences": "喜欢看老照片，熟悉的歌曲有时可以安抚情绪",
+    "triggers": "下午黄昏容易焦虑，被纠正时情绪会激动",
+    "caregiver_nickname": "林女士（虚构）"
+  },
+  "demo_care_logs": [
+    {
+      "id": "log_demo_today",
+      "day_offset": 0,
+      "note": "妈妈昨晚起来四次，今天一直说有人偷她的钱，晚饭只吃了几口。我也快撑不住了。",
+      "structured": {
+        "sleep": { "night_wakings": 4 },
+        "behavior": ["说有人偷钱（反复，约5次）"],
+        "nutrition": { "meal_intake": "few_bites", "note": "晚饭只吃了几口" },
+        "medication": { "refusal_count": 0 },
+        "caregiver": { "quote": "我也快撑不住了", "stress_signal": true }
+      },
+      "attention_items": [
+        {
+          "type": "night_safety",
+          "title": "夜间安全",
+          "severity": "watch",
+          "evidence": "昨晚起床 4 次，超过观察基线",
+          "actions": [
+            "今晚睡前打开走廊夜灯",
+            "确认卧室门口无障碍物",
+            "如再次频繁起床，记录时间和原因"
+          ],
+          "doctor_feedback_hint": "如持续出现，建议复诊时告知医生。"
+        },
+        {
+          "type": "nutrition",
+          "title": "饮食减少",
+          "severity": "watch",
+          "evidence": "晚饭只吃了几口",
+          "actions": [
+            "明天早餐准备软食或她熟悉的食物",
+            "记录今天饮水量"
+          ],
+          "doctor_feedback_hint": "如持续少食或呛咳，建议咨询医生或营养师。"
+        }
+      ],
+      "script_advice": {
+        "scenario": "说有人偷钱",
+        "not_recommended": "没人偷，你别乱想。",
+        "recommended": "你是不是很担心？我陪你一起找找看。",
+        "principle": "先回应情绪，再陪伴确认，避免直接否定和争辩。"
+      }
+    },
+    {
+      "id": "log_demo_2d",
+      "day_offset": 2,
+      "note": "前天半夜起来三次，还想开门出去，晚饭吃得少，我也几乎没睡。",
+      "structured": {
+        "sleep": { "night_wakings": 3 },
+        "behavior": ["试图开门外出"],
+        "nutrition": { "meal_intake": "less", "note": "晚饭吃得少" },
+        "caregiver": { "quote": "我也几乎没睡", "stress_signal": true }
+      }
+    },
+    {
+      "id": "log_demo_12d",
+      "day_offset": 12,
+      "note": "晚上不肯吃药一次，下午一直说要回老家，劝了很久才平静。",
+      "structured": {
+        "sleep": { "night_wakings": 1 },
+        "behavior": ["想回老家（反复）"],
+        "medication": { "refusal_count": 1 },
+        "caregiver": { "stress_signal": false }
+      }
+    },
+    {
+      "id": "log_demo_24d",
+      "day_offset": 24,
+      "note": "一起看老照片后她平静了一些，但夜里还是起来一次。",
+      "structured": {
+        "sleep": { "night_wakings": 1 },
+        "behavior": ["看老照片后情绪平稳"],
+        "caregiver": { "stress_signal": false }
+      }
+    }
+  ],
+  "demo_followup_summary": {
+    "range": "近 7 天",
+    "record_count": 4,
+    "metrics": [
+      { "label": "夜间平均起床", "value": "3.5 次 / 晚", "trend": "偏高" },
+      { "label": "按时服药率", "value": "85%", "trend": "正常" },
+      { "label": "晚饭摄入", "value": "近 3 天偏少", "trend": "需关注" }
+    ],
+    "summary_text": "近 7 天家属观察记录：夜间起床频率较高（均值约 3.5 次/晚），部分夜间有试图开门行为。饮食摄入近 3 天偏少。出现反复说有人偷钱表达，约 5–8 次/天。下午黄昏焦虑较明显。",
+    "doctor_questions": [
+      "夜间频繁起床的可能原因，是否需要进一步评估？",
+      "拒药情况如何处理，是否需要调整服药方式（需医生判断）？",
+      "饮食减少是否需要营养或吞咽相关评估？",
+      "家属长期睡眠不足，是否有社区喘息服务建议？"
+    ],
+    "material_checklist": [
+      "近期用药清单（已准备）",
+      "近 7 天照护摘要（CareMind 生成）",
+      "MRI / CT 检查报告（上次复诊报告）",
+      "认知量表结果（上次）",
+      "想问医生的问题（已整理）"
+    ],
+    "disclaimer": "本摘要为家属照护记录整理，不包含医生诊断。"
+  },
+  "demo_caregiver_checkins": [
+    { "day_offset": 0, "pressure": "high", "support": "no", "stress_level": "high" },
+    { "day_offset": 1, "pressure": "high", "support": "partial", "stress_level": "high" },
+    { "day_offset": 3, "pressure": "medium", "support": "yes", "stress_level": "medium" }
+  ],
+  "demo_effective_memory": {
+    "type": "effective_strategy",
+    "title": "老照片回忆可能有帮助",
+    "description": "在焦虑或想回家表达时，拿出熟悉的老照片一起翻看，情绪有时会平稳下来。可在下午黄昏焦虑时优先尝试，时长约 5–10 分钟。",
+    "evidence": ["24 天前记录"]
+  }
+}

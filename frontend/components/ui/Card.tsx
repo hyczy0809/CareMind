@@ -8,41 +8,51 @@ interface CardProps {
   padded?: boolean;
 }
 
-const toneStyles = {
-  default: {
-    backgroundColor: colors.surface.card,
-    borderColor: colors.border.subtle
-  },
-  brand: {
-    backgroundColor: colors.statusSoft.calm,
-    borderColor: "#B8E6D4"
-  },
-  watch: {
-    backgroundColor: colors.statusSoft.watch,
-    borderColor: "#F4D18A"
-  },
-  alert: {
-    backgroundColor: colors.statusSoft.alert,
-    borderColor: "#F1B8A9"
-  },
-  info: {
-    backgroundColor: colors.statusSoft.info,
-    borderColor: "#BFDDF3"
-  }
+const accentColors = {
+  default: null,
+  brand: colors.brand.primary,
+  watch: colors.status.watch,
+  alert: colors.status.alert,
+  info: colors.status.info
 };
 
 export function Card({ children, tone = "default", padded = true }: CardProps) {
-  return <View style={[styles.card, toneStyles[tone], padded && styles.padded]}>{children}</View>;
+  const accentColor = accentColors[tone];
+  return (
+    <View style={styles.card}>
+      {accentColor ? (
+        <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
+      ) : null}
+      <View style={[padded && styles.padded, accentColor ? styles.paddedWithAccent : null]}>
+        {children}
+      </View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   card: {
-    borderWidth: 1,
+    backgroundColor: colors.surface.card,
     borderRadius: radius.xl,
     marginBottom: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
     ...shadow.card
   },
+  accentBar: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    borderTopLeftRadius: radius.xl,
+    borderBottomLeftRadius: radius.xl
+  },
   padded: {
-    padding: 16
+    padding: 15
+  },
+  paddedWithAccent: {
+    paddingLeft: 19
   }
 });

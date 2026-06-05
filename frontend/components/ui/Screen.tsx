@@ -36,12 +36,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface.app
   },
   content: {
+    width: "100%",
+    maxWidth: 480,
+    alignSelf: "center",
     paddingHorizontal: 16,
-    paddingTop: 12
+    paddingTop: 14
   },
   staticContent: {
     flex: 1,
+    width: "100%",
+    maxWidth: 480,
+    alignSelf: "center",
     paddingHorizontal: 16,
-    paddingTop: 12
+    paddingTop: 14
   }
 });

@@ -9,6 +9,8 @@ Multi-Agent-System-for-SSE-Composite-Index-Prediction-main/
 *.py[cod]
 *.db
 my_agent/care_state.json
+my_agent/memory_store/
+uploads/
 .DS_Store
 *.log
 *.sqlite3

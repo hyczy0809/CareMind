@@ -34,14 +34,16 @@ export function PageHeader({ title, subtitle, right }: PageHeaderProps) {
 
 const styles = StyleSheet.create({
   container: {
-    minHeight: 60,
+    minHeight: 66,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: 12
+    gap: 12,
+    marginBottom: 14
   },
   titleBlock: {
-    flex: 1
+    flex: 1,
+    paddingTop: 2
   },
   title: {
     ...typography.pageTitle,
@@ -49,13 +51,14 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     ...typography.helper,
-    color: colors.text.muted,
-    marginTop: 2
+    color: colors.text.secondary,
+    marginTop: 3,
+    maxWidth: 320
   },
   settingsButton: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.surface.card,

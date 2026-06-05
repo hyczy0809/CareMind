@@ -12,11 +12,12 @@ export default function TabsLayout() {
         tabBarActiveTintColor: colors.brand.primary,
         tabBarInactiveTintColor: colors.text.secondary,
         tabBarLabelStyle: {
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: "700"
         },
+        tabBarItemStyle: styles.tabBarItem,
         tabBarStyle: styles.tabBar,
-        tabBarBackground: () => <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} />
+        tabBarBackground: () => <BlurView intensity={28} tint="light" style={StyleSheet.absoluteFill} />
       }}
     >
       <Tabs.Screen
@@ -46,12 +47,21 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    minHeight: 64,
-    paddingTop: 8,
-    paddingBottom: 10,
+    minHeight: 68,
+    paddingTop: 7,
+    paddingBottom: 12,
     borderTopWidth: 1,
     borderTopColor: colors.border.subtle,
-    backgroundColor: "rgba(255,255,255,0.86)",
-    position: "absolute"
+    backgroundColor: "rgba(255,253,249,0.92)",
+    position: "absolute",
+    shadowColor: "#3A2D23",
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 12
+  },
+  tabBarItem: {
+    minHeight: 52,
+    paddingTop: 4
   }
 });

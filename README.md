@@ -1,112 +1,172 @@
 # CareMind
 
-CareMind is an ADK-based multi-agent care assistant for families caring for
-people with dementia. It turns daily natural-language care notes into structured
-care logs, non-diagnostic risk cards, caregiver support suggestions, daily care
-plans, communication scripts, and follow-up summaries.
+![MVP](https://img.shields.io/badge/status-MVP-059669)
+![Frontend](https://img.shields.io/badge/frontend-Expo%20%2B%20React%20Native-000020)
+![Backend](https://img.shields.io/badge/backend-FastAPI-009688)
+![Model](https://img.shields.io/badge/model-OpenAI--compatible-164E63)
+![Safety](https://img.shields.io/badge/safety-non--diagnostic-0891B2)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-The current implementation focuses on the cloud-side agent group. It exposes an
-OpenAI-compatible HTTP API through FastAPI and runs Google ADK agents against a
-Cloudflare AI Gateway OpenAI-compatible model endpoint.
+CareMind helps dementia family caregivers turn messy daily care moments into structured logs, safer next actions, follow-up summaries, and doctor-facing PDF materials.
 
-## Architecture
+It is a **family care navigation app**, not a diagnosis, prescription, medical-test decision, or emergency-response system.
 
-CareMind is designed as an edge-cloud care system:
+## Why CareMind
 
-- Edge side: short-term companionship, low-latency response, offline-friendly
-  recording, privacy-first white-box indicators, and immediate reminders.
-- Cloud side: long-term tracking, professional summaries, multi-day trend
-  analysis, caregiver burden support, and follow-up materials.
+Family dementia care is fragmented. A caregiver may remember that a parent woke up four times, refused dinner, accused someone of stealing money, and that the caregiver barely slept, but those details are often lost before the next clinic visit.
 
-The cloud side is implemented as an A2A multi-agent system:
+CareMind closes that loop:
 
 ```text
-caremind_cloud_root_agent
-├── event_structuring_agent
-├── patient_risk_agent
-├── caregiver_support_agent
-├── care_plan_agent
-└── doctor_summary_agent
+Smart Log
+-> structured care record
+-> Today Care attention cards and action feedback
+-> Follow-up Prep summary, reviewed documents, and PDF export
+-> Settings event log for demo audit
 ```
 
-For demos, the root agent also exposes a one-shot workflow tool:
+## Visual Demo
 
-```python
-run_cloud_care_workflow(...)
+```mermaid
+flowchart LR
+    A["Write one messy note"] --> B["AI structures care events"]
+    B --> C["Today Care shows what matters tonight"]
+    C --> D["Caregiver marks done / blocked"]
+    B --> E["Follow-up Prep aggregates 7d / 30d"]
+    F["Upload or type medical-adjacent documents"] --> G["Caregiver reviews non-diagnostic draft"]
+    G --> E
+    E --> H["Export doctor-facing PDF"]
 ```
 
-It runs the full cloud care loop:
+Core demo scenarios:
 
-```text
-care note
--> event extraction
--> patient risk card
--> caregiver support card
--> daily care plan
--> doctor follow-up summary
-```
+| Scenario | User input | CareMind output |
+|---|---|---|
+| Daily care log | "Mum woke up four times and barely ate dinner." | Structured log, attention card, tonight actions |
+| Communication script | "She keeps saying someone stole her money." | What not to say, what to try, principle |
+| Follow-up prep | "Summarize the last week for the doctor." | 7-day summary, doctor questions, materials checklist |
+| Caregiver support | "I barely slept and I feel close to breaking down." | Burden signal, lower-goal plan, crisis guardrail if needed |
+| Medical document prep | Upload or type a medication list / report note | Non-diagnostic draft, caregiver confirmation, PDF inclusion |
+
+Screen map:
+
+| Tab | What judges should notice in 10 seconds |
+|---|---|
+| Today Care | One clear patient state, one caregiver check-in, one de-duplicated attention card |
+| Smart Log | A messy note becomes structured care events plus a usable communication script |
+| Follow-up Prep | Records and reviewed documents become doctor-facing questions, materials, and PDF |
+
+## Table Of Contents
+
+- [Why CareMind](#why-caremind)
+- [Visual Demo](#visual-demo)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Gemma4 Relationship](#gemma4-relationship)
+- [API Examples](#api-examples)
+- [Architecture](#architecture)
+- [Project Layout](#project-layout)
+- [Documentation](#documentation)
+- [Safety Boundaries](#safety-boundaries)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
-- FastAPI service with CORS enabled.
-- OpenAI-compatible `POST /v1/chat/completions` endpoint.
-- Google ADK root agent with cloud-side sub-agents.
-- White-box care indicators for night safety, wandering, medication refusal,
-  behavioral symptoms, sleep disruption, and caregiver distress.
-- JSON-backed demo care memory for events, risk cards, plans, reminders, and
-  caregiver support cards.
-- Dementia-friendly communication scripts for common care conflicts.
-- Non-diagnostic safety boundaries for all care suggestions.
-- Cloudflare AI Gateway OpenAI-compatible model adapter with function calling.
+- **Smart Log**: turns natural-language care notes into structured sleep, behavior, medication, nutrition, safety, and caregiver fields.
+- **Today Care**: shows only the most important attention cards for tonight, with `pending / done / blocked` action states.
+- **Attention de-duplication**: repeated nutrition or safety records do not create duplicate cards on the dashboard.
+- **Communication scripts**: suggests lower-conflict responses for common dementia care scenarios.
+- **Caregiver support**: tracks sleep, mood, support, and personal time; suggests lower-burden actions.
+- **Companion activities**: records low-risk, non-medical daily activities and patient responses.
+- **Follow-up Prep**: generates 7-day / 30-day summaries, doctor questions, material checklists, and PDFs.
+- **Document upload and review**: supports PDF/JPG/PNG/DOCX upload or manual document summaries; only caregiver-reviewed items enter reports.
+- **Memory-aware workflow**: preserves confirmed patterns, useful strategies, and follow-up materials.
+- **Guardrails**: redirects diagnosis, medication, imaging/test, and crisis requests into safer alternative actions.
 
-## Project Layout
+## Tech Stack
 
-```text
-.
-├── main.py
-├── openai_compat.py
-├── requirements.txt
-├── Dockerfile
-├── .env.example
-└── my_agent/
-    ├── agent.py
-    ├── cloud_agents.py            # Agent definitions (Memory-augmented)
-    ├── cloud_tools.py             # Core tool functions + Memory workflow
-    ├── care_state.py
-    ├── model_config.py
-    ├── cloudflare_openai_model.py
-    ├── memory_schema.py           # Memory data structures & built-in knowledge
-    ├── memory_state.py            # JSON read/write for memory_store/
-    ├── memory_tools.py            # retrieve_* / update_* / MCP-enriched tool functions
-    ├── memory_router.py           # Event-based Memory request routing + MCP topics
-    ├── memory_policy.py           # Write-gate policy (auto / confirm / block)
-    ├── mcp_knowledge_client.py    # Pluggable MCP external knowledge client
-    └── memory_store/
-        ├── patient_profile.json
-        ├── medication_memory.json
-        ├── behavior_baseline.json
-        ├── episodic_events.json
-        └── caregiver_state.json
-```
+| Layer | Choice |
+|---|---|
+| Frontend | Expo, React Native, Expo Router |
+| Styling | NativeWind / Tailwind-style utilities, custom UI primitives |
+| Backend | FastAPI |
+| Agent route | OpenAI-compatible `/v1/chat/completions` |
+| Business APIs | Typed `/api/*` endpoints |
+| Memory | JSON-backed MVP memory store |
+| Documents | Local upload storage for MVP |
+| PDF | Frontend export flow |
+| Model adapter | Cloudflare AI Gateway / OpenAI-compatible endpoint |
 
 ## Quick Start
 
-Install dependencies:
+### Requirements
+
+- Python 3.10+
+- Node.js 18+
+- npm
+- Optional: Cloudflare AI Gateway credentials or another OpenAI-compatible model endpoint
+
+### 1. Start The Backend
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env
+uvicorn main:app --host 127.0.0.1 --port 8090
 ```
 
-> **Python version requirement:** Python 3.10 or later is required (the codebase
-> uses `int | None` union type syntax introduced in Python 3.10).
-
-Create a local environment file:
+Check health:
 
 ```bash
-cp .env.example .env
+curl http://127.0.0.1:8090/health
 ```
 
-Set the required values in `.env`:
+### 2. Start The Frontend
+
+```bash
+cd frontend
+npm install
+EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run web -- --port 8082
+```
+
+Open:
+
+```text
+http://127.0.0.1:8082
+```
+
+### 3. Run The First Care Workflow
+
+```bash
+curl -X POST http://127.0.0.1:8090/api/care-workflow \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "local_patient",
+    "caregiver_id": "local_caregiver",
+    "note": "妈妈昨晚起来四次，今天一直说有人偷她的钱，晚饭只吃了几口。我也快撑不住了。",
+    "source": "manual",
+    "timezone": "Asia/Shanghai"
+  }'
+```
+
+## Configuration
+
+Create `.env` from `.env.example` and adjust these values:
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `CF_AIG_TOKEN` | yes, unless using another endpoint | Cloudflare AI Gateway credential |
+| `CF_AIG_BASE_URL` | yes, unless using `MODEL_BASE_URL` | OpenAI-compatible gateway URL |
+| `MODEL_NAME` | yes | Provider model identifier |
+| `MODEL_BASE_URL` | optional | Override model endpoint |
+| `MODEL_API_KEY` | optional | Provider API key when not using `CF_AIG_TOKEN` |
+| `PROMPT_MODE` | optional | `WEAK` or `STRONG` prompt mode |
+| `PORT` | optional | Default `python main.py` port |
+| `DRUGBANK_API_KEY` | optional | External MCP drug knowledge source |
+
+Minimal example:
 
 ```env
 CF_AIG_TOKEN=your-cloudflare-ai-gateway-token
@@ -114,29 +174,96 @@ CF_AIG_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat
 MODEL_NAME=google-ai-studio/gemini-2.5-flash
 PROMPT_MODE=WEAK
 PORT=8080
-
-# Optional: DrugBank MCP for real-time drug knowledge (omit to use built-in only)
-DRUGBANK_API_KEY=your_drugbank_api_key_here
 ```
 
-Start the ADK Web UI (recommended for interactive testing):
+## Gemma4 Relationship
 
-```bash
-adk web --port 8080 my_agent
+CareMind is **not a Gemma4 fork** and does not hard-code product logic into a specific model. CareMind is the application, workflow, memory, guardrail, and UX layer. Gemma4 can be used as the language model behind that layer when exposed through an OpenAI-compatible endpoint.
+
+In a Gemma4-backed setup:
+
+- **Gemma4 handles** language understanding, structured extraction, summarization, and draft generation.
+- **CareMind handles** UI flow, typed schemas, memory write gates, document confirmation, medical-boundary guardrails, PDF export, and caregiver-facing interaction design.
+- **The adapter handles** model routing through `MODEL_NAME`, `MODEL_BASE_URL`, and `MODEL_API_KEY`.
+
+To switch from the default demo model to Gemma4, use the model identifier provided by your Gemma4-compatible provider:
+
+```env
+MODEL_NAME=<provider-gemma4-model-id>
+MODEL_BASE_URL=<openai-compatible-endpoint>
+MODEL_API_KEY=<provider-api-key>
 ```
 
-Or start the FastAPI service directly:
+The `/api/*` business endpoints do not change when the model changes.
+
+## API Examples
+
+### Guardrail Preflight
 
 ```bash
-python main.py
+curl -X POST http://127.0.0.1:8090/api/guardrail/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "local_patient",
+    "caregiver_id": "local_caregiver",
+    "note": "这个药今晚要不要停药？",
+    "timezone": "Asia/Shanghai"
+  }'
 ```
 
-The API runs on `http://localhost:8080` by default.
-
-## API Example
+### Follow-up Summary With Reviewed Documents
 
 ```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8090/api/reports/follow-up \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "local_patient",
+    "caregiver_id": "local_caregiver",
+    "date_range": "7d",
+    "record_count": 3,
+    "attention_items": [],
+    "memory_items": [],
+    "followup_documents": [
+      {
+        "id": "doc_manual_1",
+        "type": "medication_list",
+        "status": "reviewed",
+        "title": "用药清单",
+        "summary": "晚饭后服药，近一周 2 次拒药。",
+        "confirmed_items": ["用药清单：晚饭后服药，近一周 2 次拒药。"],
+        "reviewed_at": "2026-06-05T08:00:00+08:00"
+      }
+    ],
+    "timezone": "Asia/Shanghai"
+  }'
+```
+
+### Document Upload And Review
+
+```bash
+curl -X POST http://127.0.0.1:8090/api/documents/upload \
+  -F patient_id=local_patient \
+  -F document_type=medication_list \
+  -F summary="当前用药清单，晚饭后服药，近期偶尔拒药。" \
+  -F file=@/path/to/document.pdf
+
+curl -X POST http://127.0.0.1:8090/api/documents/{document_id}/parse
+
+curl -X POST http://127.0.0.1:8090/api/documents/{document_id}/review \
+  -H "Content-Type: application/json" \
+  -d '{
+    "confirmed_items": [
+      "已补充用药清单：当前用药清单，晚饭后服药，近期偶尔拒药。",
+      "该资料仅用于复诊沟通整理，影像、量表、诊断和用药结论仍需医生判断。"
+    ],
+    "family_note": "家属已核对来源。"
+  }'
+```
+
+### OpenAI-Compatible Agent Route
+
+```bash
+curl -X POST http://127.0.0.1:8090/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "my_agent",
@@ -150,204 +277,110 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   }'
 ```
 
----
+## Architecture
 
-## Memory Module
+```mermaid
+flowchart TD
+    A["Expo / React Native app"] --> B["FastAPI business APIs"]
+    B --> C["Care workflow service"]
+    C --> D["Guardrail checks"]
+    C --> E["Memory-aware care workflow"]
+    C --> F["Document upload and review"]
+    E --> G["JSON memory store"]
+    E --> H["OpenAI-compatible model adapter"]
+    H --> I["Cloudflare AI Gateway or Gemma4-compatible provider"]
+    C --> J["Follow-up summary and PDF data"]
+```
 
-CareMind now includes a persistent Memory layer that upgrades it from a
-single-turn care assistant to a long-term family care agent. The Memory module
-is designed around the principle that dementia care is inherently longitudinal:
-patterns, interventions, and caregiver states must be tracked across sessions to
-provide meaningful, personalised support.
-
-### Design Goals
-
-1. **Personalisation** — remember the patient's communication preferences,
-   behavioural patterns, medication schedule, and effective calming strategies.
-2. **Long-term tracking** — accumulate daily care events to detect trends in
-   night wandering, medication refusal, behavioural escalation, and caregiver
-   fatigue.
-3. **Professional knowledge retrieval** — surface dementia care guidelines,
-   safety rules, and communication principles at the right moment without
-   crossing diagnostic boundaries.
-
-### Memory Types
-
-| Memory Type | Storage | Contents | Privacy |
-|---|---|---|---|
-| Patient Profile | Local (`patient_profile.json`) | Age, diagnosis stage, comorbidities, communication preferences, daily routine | Default local |
-| Medication Memory | Local (`medication_memory.json`) | Current medications, dosage, schedule, refusal/missed-dose log | Default local |
-| Behavior Baseline | Local (`behavior_baseline.json`) | Known behaviours, triggers, effective/ineffective interventions | Default local |
-| Episodic Events | Local (`episodic_events.json`) | Structured daily care events with timestamps and severity | Desensitised summaries may sync to cloud |
-| Caregiver State | Local (`caregiver_state.json`) | Sleep quality, stress signals, burnout indicators | Default local |
-| Professional Knowledge | Built-in (`memory_schema.py`) | Dementia care guidelines, safety boundaries, communication scripts | Cloud-maintained |
-
-
-### Memory-Augmented Agent Tools
-
-Each cloud agent now receives the appropriate Memory tools:
-
-| Agent | Memory tools |
-|---|---|
-| `event_structuring_agent` | `update_event_memory`, `retrieve_patient_profile` |
-| `patient_risk_agent` | `retrieve_patient_profile`, `retrieve_recent_events`, `retrieve_behavior_baseline`, `retrieve_professional_knowledge`, `retrieve_safety_rules` |
-| `caregiver_support_agent` | `retrieve_caregiver_state`, `update_caregiver_state`, `retrieve_professional_knowledge` |
-| `care_plan_agent` | `retrieve_patient_profile`, `retrieve_behavior_baseline`, `retrieve_similar_care_cases`, `retrieve_medication_memory`, `retrieve_professional_knowledge`, `propose_memory_update`, `confirm_and_update_behavior_baseline` |
-| `doctor_summary_agent` | `retrieve_recent_events`, `retrieve_medication_memory`, `retrieve_behavior_baseline`, `retrieve_caregiver_state`, `retrieve_patient_profile` |
-
-### Memory Write-Gate Policy
-
-To prevent hallucinated or low-confidence data from polluting long-term memory,
-all writes pass through `memory_policy.py`:
-
-- **Auto-write** — episodic events and caregiver state updates are written
-  immediately without user confirmation.
-- **Needs confirmation** — behaviour baseline updates and patient profile changes
-  require a user-facing confirmation prompt.
-- **Blocked** — any candidate flagged as a diagnostic conclusion or medication
-  recommendation is rejected.
-
-### External Knowledge via MCP (Model Context Protocol)
-
-The built-in `KNOWLEDGE_DB` covers general dementia care principles but cannot
-answer dynamic drug-specific questions such as: *"What are the side-effects of
-this medication?"* or *"Are there interactions between these two drugs?"*
-
-CareMind introduces a **pluggable MCP knowledge layer** that integrates
-authoritative medical databases (e.g. DrugBank) as hot-swappable real-time
-knowledge sources.
-
-#### Architecture
+The agent side can be understood as:
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                 CareMind Cloud Agents                    │
-│  event_structuring → patient_risk → care_plan → summary │
-└────────────────────┬────────────────────────────────────┘
-                     │ retrieve_enriched_knowledge()
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│              Memory Knowledge Layer                      │
-│  ┌──────────────────┐  ┌──────────────────────────────┐ │
-│  │  KNOWLEDGE_DB    │  │  MCPKnowledgeHub (external)  │ │
-│  │  (built-in)      │  │  ┌────────────────────────┐  │ │
-│  │  · Night safety  │  │  │ DrugBank MCP           │  │ │
-│  │  · Communication │  │  │  · drug_search         │  │ │
-│  │  · Med refusal   │  │  │  · drug_interactions   │  │ │
-│  │  · Carer burden  │  │  │  · drug_details        │  │ │
-│  │  · Safety rules  │  │  └────────────────────────┘  │ │
-│  └──────────────────┘  │  ┌────────────────────────┐  │ │
-│                        │  │ PubChem  (reserved)    │  │ │
-│                        │  │ OpenFDA  (reserved)    │  │ │
-│                        │  └────────────────────────┘  │ │
-│                        └──────────────────────────────┘ │
-│           merge_knowledge(builtin, external)             │
-│           · built-in → source_type = "inline"            │
-│           · MCP      → source_type = "mcp"               │
-│           · same knowledge_id: external overrides inline │
-└─────────────────────────────────────────────────────────┘
+caremind_cloud_root_agent
+├── event_structuring_agent
+├── patient_risk_agent
+├── caregiver_support_agent
+├── care_plan_agent
+└── doctor_summary_agent
 ```
 
-#### Event-Triggered Data Flow
+## Project Layout
 
 ```text
-Carer input: "Mum refused to take donepezil again tonight"
-    │
-    ▼
-event_structuring_agent
-    → event_type = "medication_refusal"
-    │
-    ▼
-memory_router.route_memory_requests()
-    → triggers  extract_drug_names = True
-    → routes    mcp_knowledge_topics → ["medication", "medication_refusal"]
-    │
-    ▼
-execute_memory_retrieval()
-    ├── built-in:  retrieve_professional_knowledge(["medication_refusal"])
-    │              → "Do not force medication or self-adjust dose..."
-    │
-    └── MCP:       retrieve_enriched_knowledge(topic, drug_names=["donepezil"])
-                   │
-                   POST https://mcp.drugbank.com/mcp
-                   { "method": "tools/call",
-                     "params": {"name": "drug_search",
-                                "arguments": {"query": "donepezil"}} }
-                   │
-                   ← drug name, indication, mechanism, side-effects...
-                   │
-                   ▼
-    merge_knowledge(builtin, mcp_results)
-        → patient_risk_agent  (risk assessment enriched with pharmacology)
-        → care_plan_agent     (plan includes drug-specific cautions)
+.
+├── frontend/
+│   ├── app/
+│   ├── components/
+│   ├── lib/
+│   └── types/
+├── docs/
+│   └── PRD.md
+├── main.py
+├── openai_compat.py
+├── requirements.txt
+├── Dockerfile
+├── .env.example
+└── my_agent/
+    ├── agent.py
+    ├── care_workflow_schema.py
+    ├── care_workflow_service.py
+    ├── cloud_agents.py
+    ├── cloud_tools.py
+    ├── model_config.py
+    ├── cloudflare_openai_model.py
+    ├── memory_schema.py
+    ├── memory_state.py
+    ├── memory_tools.py
+    ├── memory_router.py
+    ├── memory_policy.py
+    └── memory_store/
 ```
 
-#### MCP Routing Rules
+## Documentation
 
-| Event type | Built-in topics | MCP topics | Extract drug names |
-|---|---|---|---|
-| `medication_refusal` | `medication_refusal`, `medication` | `medication`, `medication_refusal` | ✅ |
-| `general_note` | matched by content | — | — |
-| others | matched by rule | — | — |
+- Product PRD: [docs/PRD.md](docs/PRD.md)
+- Frontend guide: [frontend/README.md](frontend/README.md)
+- Environment template: [.env.example](.env.example)
 
-#### Cache and Graceful Degradation
+## Safety Boundaries
 
-```text
-1. Check local cache (TTL 1 hour)
-      hit  → return cached result
-      miss → continue
-2. POST to DrugBank MCP (max 2 retries)
-      200 OK       → parse, cache, return
-      401 / 403    → silently skip (no API key configured)
-      500+ Timeout → retry, then fall back to built-in only
-3. Built-in KNOWLEDGE_DB is always the final fallback
+CareMind intentionally uses conservative language and workflow constraints:
+
+- It does not diagnose dementia progression.
+- It does not suggest starting, stopping, changing, or replacing medication.
+- It does not decide whether MRI, CT, PET, blood tests, or cognitive scales are needed.
+- It does not claim that diet or activities treat, reverse, or improve cognitive decline.
+- Crisis inputs such as missing person, self-harm, harm to others, acute confusion, or serious injury are routed to urgent support guidance.
+
+Medical-adjacent document handling is limited to **family record organization and follow-up communication**. Imaging, scales, diagnosis, and medication conclusions must be judged by clinicians.
+
+## Contributing
+
+Contributions are welcome, especially:
+
+- UX improvements for caregiver clarity and lower cognitive load.
+- Safer medical-boundary wording.
+- Test cases for guardrails, document review, and follow-up summary generation.
+- Frontend accessibility fixes.
+- API contract improvements that preserve typed schemas.
+
+Before opening a pull request:
+
+```bash
+cd frontend
+npm run typecheck
 ```
 
-The system behaves identically to pre-MCP versions when `DRUGBANK_API_KEY` is
-not set — all MCP calls are silently skipped and only built-in knowledge is used.
+Also include:
 
-#### Adding New MCP Sources
+- What changed.
+- How you tested it.
+- Screenshots or a short screen recording for UI changes.
+- Any safety-boundary impact.
 
-Register a new source in `mcp_knowledge_client.py`:
+## License
 
-```python
-MCP_SOURCE_REGISTRY["pubchem"] = MCPSourceConfig(
-    source_id="pubchem",
-    endpoint="https://mcp.pubchem.ncbi.nlm.nih.gov/mcp",
-    api_key=os.environ.get("PUBCHEM_API_KEY", ""),
-    available_tools=["compound_search", "compound_details"],
-    description="PubChem chemical compound database",
-)
-```
+This project is released under the [MIT License](LICENSE).
 
-#### Safety Boundary
+## Acknowledgments
 
-MCP-sourced drug data is **caregiver information only** — not a medical decision
-basis.
-
-- ✅ Cite drug indications, side-effects, and interactions as care reference
-- ✅ Annotate all MCP results with `"Source: DrugBank — for reference only"`
-- ✗ Do not substitute MCP data for a doctor's prescription or advice
-- ✗ Do not suggest switching or stopping medication based on MCP results
-- ✗ Do not make "safer" or "more suitable" judgements from external data
-
-#### Configuration
-
-Add to `.env` (optional; omit to use built-in knowledge only):
-
-```env
-DRUGBANK_API_KEY=your_drugbank_api_key_here
-```
-
----
-
-## Notes
-
-- Do not commit `.env`; use `.env.example` as the template.
-- `my_agent/care_state.json` is runtime state and is ignored by git.
-- `my_agent/memory_store/` holds persistent Memory JSON files. Back these up if
-  you want to preserve long-term care history across environments.
-- If Cloudflare should forward a separate provider API key, set `MODEL_API_KEY`.
-- Otherwise, `CF_AIG_TOKEN` is used as the gateway credential.
-- CareMind provides care support and communication preparation. It does not
-  diagnose, prescribe, or replace medical professionals.
+CareMind's safety framing is informed by public dementia care guidance and caregiver-support resources, including NICE dementia recommendations, Mayo Clinic diagnosis education, and Alzheimer's Association caregiver stress materials. These sources guide product boundaries; they do not make CareMind a medical device or clinical decision system.

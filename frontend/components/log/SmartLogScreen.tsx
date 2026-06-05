@@ -1,21 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Keyboard, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
+import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
 import {
   Check,
+  ChevronRight,
+  Clock,
   ClipboardList,
   Mic,
-  Pencil,
   Play,
-  Sparkles,
   Volume2,
   X
 } from "lucide-react-native";
 import { useCareMind } from "../../lib/caremind-store";
+import { transcribeAudioNote } from "../../lib/care-workflow-api";
 import { selectionHaptic, successHaptic } from "../../lib/safe-haptics";
 import { colors, hitSlop, shadow, typography } from "../../lib/theme";
-import type { MemoryItem, StructuredLog } from "../../types/caremind";
+import type { AnalyticsEvent, MemoryItem, StructuredLog } from "../../types/caremind";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { PageHeader } from "../ui/PageHeader";
@@ -26,18 +28,132 @@ import { SimilarEventCard } from "../memory/SimilarEventCard";
 
 type ParseState = "idle" | "parsing" | "parsed" | "saved";
 type SummaryField = "sleep" | "behavior" | "nutrition" | "caregiver";
+type VoiceState = "idle" | "listening" | "transcribing" | "unsupported" | "error";
 type ScriptAdvice = {
   notRecommended: string;
   recommended: string;
   principle: string;
 };
 
-const progressSteps = ["提取照护事件", "识别今天值得关注", "生成沟通建议", "检查是否需要记住新模式"];
+type BrowserSpeechRecognitionResult = {
+  isFinal: boolean;
+  0?: {
+    transcript?: string;
+  };
+};
+
+type BrowserSpeechRecognitionEvent = {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: BrowserSpeechRecognitionResult;
+  };
+};
+
+type BrowserSpeechRecognitionErrorEvent = {
+  error?: string;
+  message?: string;
+};
+
+type BrowserSpeechRecognition = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+};
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+const progressSteps = ["整理今天发生的事", "找出值得留意的地方", "生成沟通建议", "记住有用的照护方式"];
 const quickChips = ["夜里起来了", "不肯吃饭", "说有人偷钱", "不肯吃药"];
 const medicalKeywords = /诊断|停药|换药|加药|减药|补药|MRI|CT|核磁|检查|处方|药量/;
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getSpeechRecognitionConstructor(): BrowserSpeechRecognitionConstructor | null {
+  if (Platform.OS !== "web" || typeof window === "undefined") {
+    return null;
+  }
+
+  const speechWindow = window as typeof window & {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  };
+
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+}
+
+function buildVoiceErrorMessage(error?: string) {
+  if (error === "not-allowed" || error === "service-not-allowed") {
+    return "浏览器没有麦克风权限，请允许后再试。";
+  }
+  if (error === "no-speech") {
+    return "没有听到声音，可以靠近一点再试。";
+  }
+  if (error === "audio-capture") {
+    return "没有检测到可用麦克风。";
+  }
+  if (error === "network") {
+    return "语音识别网络暂时不可用，可以先手动输入。";
+  }
+  return "这次没有成功转成文字，可以再试一次或手动输入。";
+}
+
+function formatHeaderDateTime() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  })
+    .format(new Date())
+    .replace(/\//g, "-");
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function formatDateInput(iso: string) {
+  const date = new Date(iso);
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function formatTimeInput(iso: string) {
+  const date = new Date(iso);
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function parseDateTimeInput(dateText: string, timeText: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText) || !/^\d{2}:\d{2}$/.test(timeText)) {
+    return null;
+  }
+  const parsed = new Date(`${dateText}T${timeText}:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function formatEventDateTime(iso: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  })
+    .format(new Date(iso))
+    .replace(/\//g, "-");
 }
 
 function MedicalBoundaryBubble({ onClose }: { onClose: () => void }) {
@@ -51,29 +167,385 @@ function MedicalBoundaryBubble({ onClose }: { onClose: () => void }) {
   );
 }
 
+function EventTimeButton({ eventAt, onChange }: { eventAt: string; onChange: (next: string) => void }) {
+  const [visible, setVisible] = useState(false);
+  const [dateDraft, setDateDraft] = useState(formatDateInput(eventAt));
+  const [timeDraft, setTimeDraft] = useState(formatTimeInput(eventAt));
+  const [error, setError] = useState<string | null>(null);
+
+  function open() {
+    setDateDraft(formatDateInput(eventAt));
+    setTimeDraft(formatTimeInput(eventAt));
+    setError(null);
+    setVisible(true);
+  }
+
+  function save() {
+    const next = parseDateTimeInput(dateDraft.trim(), timeDraft.trim());
+    if (!next) {
+      setError("请按 YYYY-MM-DD 和 HH:mm 填写。");
+      return;
+    }
+    Keyboard.dismiss();
+    onChange(next);
+    setVisible(false);
+  }
+
+  function setNow() {
+    const now = new Date().toISOString();
+    setDateDraft(formatDateInput(now));
+    setTimeDraft(formatTimeInput(now));
+    onChange(now);
+  }
+
+  return (
+    <>
+      <Pressable accessibilityRole="button" hitSlop={hitSlop} onPress={open} style={styles.eventTimeButton}>
+        <View style={styles.eventTimeIcon}>
+          <Clock color={colors.brand.primaryDark} size={18} />
+        </View>
+        <View style={styles.eventTimeCopy}>
+          <Text style={styles.eventTimeLabel}>发生时间</Text>
+          <Text style={styles.eventTimeValue}>{formatEventDateTime(eventAt)}</Text>
+        </View>
+        <Text style={styles.eventTimeEdit}>修改</Text>
+      </Pressable>
+
+      <Modal visible={visible} transparent animationType="slide" onRequestClose={() => setVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>选择记录发生时间</Text>
+            <Text style={styles.body}>如果只是大概时间，也可以先填接近的时间，之后再修改。</Text>
+            <Text style={styles.label}>日期</Text>
+            <TextInput
+              accessibilityLabel="发生日期"
+              value={dateDraft}
+              onChangeText={setDateDraft}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.text.muted}
+              style={styles.compactInput}
+            />
+            <Text style={styles.label}>时间</Text>
+            <TextInput
+              accessibilityLabel="发生时间"
+              value={timeDraft}
+              onChangeText={setTimeDraft}
+              placeholder="HH:mm"
+              placeholderTextColor={colors.text.muted}
+              style={styles.compactInput}
+            />
+            {error ? <Text style={styles.inputError}>{error}</Text> : null}
+            <View style={styles.sheetActions}>
+              <Button label="保存时间" onPress={save} />
+              <Button label="设为现在" variant="secondary" onPress={setNow} />
+              <Button label="取消" variant="ghost" onPress={() => setVisible(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
 function MagicLogInput({
   value,
   onChange,
   onParse,
+  onTrackVoiceEvent,
+  eventAt,
+  onChangeEventAt,
   parseState,
   showBoundary,
   onDismissBoundary,
   error,
+  patientId,
   nickname
 }: {
   value: string;
   onChange: (value: string) => void;
   onParse: () => void;
+  onTrackVoiceEvent: (name: "voice_input_started" | "voice_input_succeeded" | "voice_input_failed" | "voice_input_unsupported", properties?: AnalyticsEvent["properties"]) => void;
+  eventAt: string;
+  onChangeEventAt: (next: string) => void;
   parseState: ParseState;
   showBoundary: boolean;
   onDismissBoundary: () => void;
   error: string | null;
+  patientId: string;
   nickname: string;
 }) {
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const latestValueRef = useRef(value);
+  const finalTranscriptRef = useRef("");
+  const voiceHadErrorRef = useRef(false);
+  const nativeStopRequestedRef = useRef(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceHint, setVoiceHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    latestValueRef.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
+      if (recordingRef.current) {
+        void recordingRef.current.stopAndUnloadAsync().catch(() => undefined);
+        recordingRef.current = null;
+      }
+    };
+  }, []);
+
+  function appendTranscript(transcript: string) {
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript) return;
+
+    const current = latestValueRef.current.trim();
+    const separator = current && !/[，。！？,.!?]$/.test(current) ? "，" : "";
+    onChange(current ? `${current}${separator}${cleanTranscript}` : cleanTranscript);
+  }
+
+  function unsupportedVoiceInput() {
+    setVoiceState("unsupported");
+    setVoiceHint(
+      Platform.OS === "web"
+        ? "当前浏览器不支持语音转文字。建议用 Chrome / Edge，或先手动输入。"
+        : "当前设备暂不支持录音转文字，可以先手动输入。"
+    );
+    onTrackVoiceEvent("voice_input_unsupported", {
+      platform: Platform.OS
+    });
+  }
+
+  function startWebSpeechInput() {
+    const SpeechRecognition = getSpeechRecognitionConstructor();
+    if (!SpeechRecognition) {
+      unsupportedVoiceInput();
+      return;
+    }
+
+    recognitionRef.current?.abort();
+    finalTranscriptRef.current = "";
+    voiceHadErrorRef.current = false;
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "zh-CN";
+    recognition.interimResults = true;
+    recognition.continuous = true;
+
+    recognition.onstart = () => {
+      setVoiceState("listening");
+      setVoiceHint("正在听，松手后我会转成文字。");
+      onTrackVoiceEvent("voice_input_started", { platform: Platform.OS });
+    };
+
+    recognition.onresult = (event) => {
+      let finalText = "";
+      let interimText = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript ?? "";
+        if (result.isFinal) {
+          finalText += transcript;
+        } else {
+          interimText += transcript;
+        }
+      }
+
+      if (finalText.trim()) {
+        finalTranscriptRef.current = `${finalTranscriptRef.current}${finalText}`;
+        setVoiceHint(`已听到：${finalTranscriptRef.current.trim()}`);
+      } else if (interimText.trim()) {
+        setVoiceHint(`正在听：${interimText.trim()}`);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      voiceHadErrorRef.current = true;
+      recognitionRef.current = null;
+      setVoiceState("error");
+      setVoiceHint(buildVoiceErrorMessage(event.error));
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        reason: event.error ?? "unknown"
+      });
+    };
+
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      if (voiceHadErrorRef.current) return;
+
+      const transcript = finalTranscriptRef.current.trim();
+      if (transcript) {
+        appendTranscript(transcript);
+        setVoiceHint("已转成文字，你可以继续补充或点“帮我整理”。");
+        onTrackVoiceEvent("voice_input_succeeded", {
+          platform: Platform.OS,
+          transcript_length: transcript.length
+        });
+      } else {
+        setVoiceHint("没有听到清楚内容，可以再按住说一次。");
+      }
+      setVoiceState("idle");
+    };
+
+    recognitionRef.current = recognition;
+    setVoiceState("listening");
+    setVoiceHint("正在请求麦克风权限……");
+
+    try {
+      recognition.start();
+    } catch (error) {
+      recognitionRef.current = null;
+      setVoiceState("error");
+      setVoiceHint("语音识别没有启动成功，可以刷新页面后再试。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        reason: error instanceof Error ? error.message : "start_failed"
+      });
+    }
+  }
+
+  function stopWebSpeechInput() {
+    if (!recognitionRef.current) return;
+    setVoiceHint("正在转成文字……");
+    try {
+      recognitionRef.current.stop();
+    } catch {
+      recognitionRef.current = null;
+      setVoiceState("idle");
+    }
+  }
+
+  async function startNativeRecording() {
+    if (recordingRef.current || voiceState === "transcribing") return;
+
+    nativeStopRequestedRef.current = false;
+    setVoiceState("listening");
+    setVoiceHint("正在请求麦克风权限……");
+
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        setVoiceState("error");
+        setVoiceHint("没有麦克风权限，请在系统设置里允许 CareMind 使用麦克风。");
+        onTrackVoiceEvent("voice_input_failed", {
+          platform: Platform.OS,
+          reason: "microphone_permission_denied"
+        });
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true
+      });
+
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await recording.startAsync();
+      recordingRef.current = recording;
+      setVoiceHint("正在录音，松手后我会转成文字。");
+      onTrackVoiceEvent("voice_input_started", { platform: Platform.OS });
+
+      if (nativeStopRequestedRef.current) {
+        await stopNativeRecording();
+      }
+    } catch (error) {
+      recordingRef.current = null;
+      nativeStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint("录音没有启动成功，可以检查麦克风权限后再试。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        reason: error instanceof Error ? error.message : "recording_start_failed"
+      });
+    }
+  }
+
+  async function stopNativeRecording() {
+    const recording = recordingRef.current;
+    if (!recording) {
+      nativeStopRequestedRef.current = true;
+      return;
+    }
+
+    recordingRef.current = null;
+    nativeStopRequestedRef.current = false;
+    setVoiceState("transcribing");
+    setVoiceHint("正在上传并转成文字……");
+
+    try {
+      await recording.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true
+      });
+
+      const uri = recording.getURI();
+      if (!uri) {
+        throw new Error("recording_uri_missing");
+      }
+
+      const result = await transcribeAudioNote({
+        patientId,
+        language: "zh",
+        asset: {
+          uri,
+          name: `caremind_voice_${Date.now()}.m4a`,
+          mimeType: "audio/m4a"
+        }
+      });
+
+      appendTranscript(result.transcript);
+      setVoiceState("idle");
+      setVoiceHint("已转成文字，你可以继续补充或点“帮我整理”。");
+      onTrackVoiceEvent("voice_input_succeeded", {
+        platform: Platform.OS,
+        transcript_length: result.transcript.length
+      });
+    } catch (error) {
+      setVoiceState("error");
+      setVoiceHint(error instanceof Error ? error.message : "语音转文字失败，可以再试一次或手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        reason: error instanceof Error ? error.message : "native_transcription_failed"
+      });
+    }
+  }
+
+  function startVoiceInput() {
+    if (parseState === "parsing") return;
+    if (Platform.OS === "web") {
+      startWebSpeechInput();
+      return;
+    }
+    void startNativeRecording();
+  }
+
+  function stopVoiceInput() {
+    if (Platform.OS === "web") {
+      stopWebSpeechInput();
+      return;
+    }
+    void stopNativeRecording();
+  }
+
+  const voiceActive = voiceState === "listening" || voiceState === "transcribing";
+  const voiceUnavailable = voiceState === "unsupported" || voiceState === "error";
+  const voiceLabel = voiceState === "listening" ? "正在听" : voiceState === "transcribing" ? "转写中" : "按住说话";
+
   return (
     <Card>
       <Text style={styles.cardTitle}>今天 {nickname} 有什么让你担心的事吗？</Text>
       <Text style={styles.body}>写一句话就够了，也可以直接粘贴家属聊天记录。</Text>
+      <EventTimeButton eventAt={eventAt} onChange={onChangeEventAt} />
       {showBoundary ? <MedicalBoundaryBubble onClose={onDismissBoundary} /> : null}
       <TextInput
         accessibilityLabel="输入今天发生了什么"
@@ -89,7 +561,7 @@ function MagicLogInput({
       />
       <View style={styles.inputMetaRow}>
         <Text style={styles.inputError}>{error ?? ""}</Text>
-        <Text style={styles.charCount}>{value.length} / 1000</Text>
+        {value.length > 800 ? <Text style={styles.charCount}>{value.length} / 1000</Text> : null}
       </View>
       <View style={styles.quickRow}>
         {quickChips.map((chip) => (
@@ -105,24 +577,43 @@ function MagicLogInput({
         ))}
       </View>
       <View style={styles.inputActions}>
-        <Pressable accessibilityRole="button" accessibilityLabel="长按说话" hitSlop={hitSlop} style={styles.voiceButton}>
-          <Mic color={colors.brand.primaryDark} size={20} />
-          <Text style={styles.voiceText}>长按说话</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="按住说话，松手结束"
+          accessibilityState={{ busy: voiceActive, disabled: parseState === "parsing" }}
+          hitSlop={hitSlop}
+          disabled={parseState === "parsing"}
+          onPressIn={startVoiceInput}
+          onPressOut={stopVoiceInput}
+          style={({ pressed }) => [
+            styles.voiceButton,
+            voiceActive && styles.voiceButtonActive,
+            voiceUnavailable && styles.voiceButtonUnavailable,
+            pressed && styles.voiceButtonPressed
+          ]}
+        >
+          <Mic color={voiceActive ? colors.text.inverse : voiceUnavailable ? colors.status.watch : colors.text.secondary} size={20} />
+          <Text style={[styles.voiceText, voiceActive && styles.voiceTextActive, voiceUnavailable && styles.voiceTextUnavailable]}>
+            {voiceLabel}
+          </Text>
         </Pressable>
         <View style={styles.parseButton}>
           <Button label="帮我整理" loading={parseState === "parsing"} onPress={onParse} />
         </View>
       </View>
+      {voiceHint ? (
+        <Text style={[styles.voiceHint, voiceUnavailable && styles.voiceHintWarning]}>{voiceHint}</Text>
+      ) : null}
     </Card>
   );
 }
 
 function AgentProgressCard({ completedSteps }: { completedSteps: number }) {
   return (
-    <Card tone="brand">
+    <Card tone="default">
       <View style={styles.headerRow}>
-        <Sparkles color={colors.brand.primaryDark} size={20} />
-        <Text style={styles.cardTitle}>正在帮你整理</Text>
+        <ActivityIndicator size={18} color={colors.brand.primary} />
+        <Text style={styles.cardTitle}>我来帮你整理……</Text>
       </View>
       <View style={styles.progressList}>
         {progressSteps.map((step, index) => {
@@ -130,10 +621,10 @@ function AgentProgressCard({ completedSteps }: { completedSteps: number }) {
           const active = index === completedSteps;
           return (
             <View key={step} style={styles.progressRow}>
-              <View style={[styles.progressIcon, done && styles.progressIconDone, active && styles.progressIconActive]}>
-                {done ? <Check color="#FFFFFF" size={14} /> : <Text style={styles.progressNumber}>{index + 1}</Text>}
+              <View style={[styles.progressDot, done && styles.progressDotDone, active && styles.progressDotActive]}>
+                {done ? <Check color="#FFFFFF" size={12} /> : null}
               </View>
-              <Text style={styles.progressText}>{step}</Text>
+              <Text style={[styles.progressText, done && styles.progressTextDone]}>{step}</Text>
             </View>
           );
         })}
@@ -201,6 +692,7 @@ function StructuredSummaryCard({
 
     if (editingField === "nutrition") {
       next.nutrition = {
+        ...structuredLog.nutrition,
         mealIntake: finalValue === "未知" ? "unknown" : structuredLog.nutrition.mealIntake,
         note: finalValue
       };
@@ -222,7 +714,6 @@ function StructuredSummaryCard({
       <View style={styles.headerRow}>
         <ClipboardList color={colors.brand.primaryDark} size={20} />
         <Text style={styles.cardTitle}>今天记录的内容</Text>
-        <Pencil color={colors.text.muted} size={18} />
       </View>
       <View style={styles.summaryGrid}>
         <SummaryRow label="睡眠" value={rows.sleep} uncertain={structuredLog.sleep.nightWakings === null} onPress={() => openEdit("sleep")} />
@@ -235,6 +726,7 @@ function StructuredSummaryCard({
       <Modal visible={editingField !== null} transparent animationType="slide" onRequestClose={() => setEditingField(null)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>修改字段</Text>
             <TextInput
               accessibilityLabel="修改结构化字段"
@@ -276,6 +768,7 @@ function SummaryRow({
           <Text style={styles.uncertainText}>待确认</Text>
         </View>
       ) : null}
+      <ChevronRight color={colors.text.muted} size={16} />
     </Pressable>
   );
 }
@@ -322,9 +815,9 @@ function InstantScriptCard({ advice }: { advice: ScriptAdvice }) {
 
 function SavedState() {
   return (
-    <Card tone="brand">
+    <Card tone="default">
       <View style={styles.headerRow}>
-        <Check color={colors.brand.primaryDark} size={22} />
+        <Check color={colors.brand.primary} size={22} />
         <Text style={styles.cardTitle}>已写入今天的照护日志</Text>
       </View>
       <Text style={styles.body}>去今日照护查看今晚行动建议，或继续再记一条。</Text>
@@ -337,8 +830,11 @@ function SavedState() {
 
 function MilestoneToast({ text }: { text: string }) {
   return (
-    <View style={styles.toast}>
-      <Text style={styles.toastText}>{text}</Text>
+    <View style={styles.toastWrap} pointerEvents="none">
+      <View style={styles.toast}>
+        <View style={styles.toastDot} />
+        <Text style={styles.toastText}>{text}</Text>
+      </View>
     </View>
   );
 }
@@ -352,9 +848,11 @@ export function SmartLogScreen() {
     lastStructuredLog,
     previewStructuredLog,
     previewMemoryCandidate,
-    saveLog
+    saveLog,
+    trackEvent
   } = useCareMind();
   const [value, setValue] = useState("");
+  const [eventAt, setEventAt] = useState(new Date().toISOString());
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedLog, setParsedLog] = useState<StructuredLog | null>(null);
   const [candidate, setCandidate] = useState<MemoryItem | null>(null);
@@ -363,6 +861,7 @@ export function SmartLogScreen() {
   const [boundaryDismissed, setBoundaryDismissed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [hydratedInitialLog, setHydratedInitialLog] = useState(false);
+  const headerDateTime = useMemo(() => formatHeaderDateTime(), []);
   const similarMemory = useMemo(() => memoryItems.find((item) => item.status === "confirmed"), [memoryItems]);
   const scriptAdvice = parsedLog ? buildScriptAdvice(value, parsedLog) : null;
   const showBoundary = !boundaryDismissed && medicalKeywords.test(value);
@@ -405,7 +904,7 @@ export function SmartLogScreen() {
 
   async function save() {
     if (!parsedLog) return;
-    saveLog(value, parsedLog);
+    saveLog(value, parsedLog, { occurredAt: eventAt });
     setParseState("saved");
     await successHaptic();
     showToast(recordCount === 0 ? `你帮 ${patient.nickname} 记录了第一个重要信息。` : "已保存，复诊摘要会同步更新。");
@@ -417,13 +916,15 @@ export function SmartLogScreen() {
     setCandidate(null);
     setCompletedSteps(0);
     setInputError(null);
+    setEventAt(new Date().toISOString());
     setParseState("idle");
   }
 
   return (
     <Screen>
-      <PageHeader title="智能记录" subtitle={`${patient.nickname} · 你说，我帮你整理`} />
+      <PageHeader title="智能记录" subtitle={headerDateTime} />
       {toast ? <MilestoneToast text={toast} /> : null}
+
       <MagicLogInput
         value={value}
         onChange={(next) => {
@@ -431,10 +932,14 @@ export function SmartLogScreen() {
           setInputError(null);
         }}
         onParse={parse}
+        onTrackVoiceEvent={trackEvent}
+        eventAt={eventAt}
+        onChangeEventAt={setEventAt}
         parseState={parseState}
         showBoundary={showBoundary}
         onDismissBoundary={() => setBoundaryDismissed(true)}
         error={inputError}
+        patientId={patient.id}
         nickname={patient.nickname}
       />
       {parseState === "parsing" ? <AgentProgressCard completedSteps={completedSteps} /> : null}
@@ -513,7 +1018,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: colors.statusSoft.info,
     borderWidth: 1,
-    borderColor: "#BFDDF3",
+    borderColor: "#C7DDED",
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -534,9 +1039,46 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#FFFFFF99"
   },
+  eventTimeButton: {
+    minHeight: 58,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.statusSoft.calm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    marginTop: 14
+  },
+  eventTimeIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.72)"
+  },
+  eventTimeCopy: {
+    flex: 1
+  },
+  eventTimeLabel: {
+    ...typography.small,
+    color: colors.brand.primaryDark,
+    fontWeight: "800"
+  },
+  eventTimeValue: {
+    ...typography.helper,
+    color: colors.text.primary,
+    marginTop: 2
+  },
+  eventTimeEdit: {
+    ...typography.label,
+    color: colors.brand.primaryDark
+  },
   textInput: {
     minHeight: 138,
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: colors.border.subtle,
     backgroundColor: colors.surface.muted,
@@ -558,6 +1100,22 @@ const styles = StyleSheet.create({
     ...typography.small,
     color: colors.status.watch,
     flex: 1
+  },
+  label: {
+    ...typography.label,
+    color: colors.text.primary,
+    marginTop: 14,
+    marginBottom: 8
+  },
+  compactInput: {
+    minHeight: 50,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.surface.muted,
+    paddingHorizontal: 14,
+    ...typography.body,
+    color: colors.text.primary
   },
   charCount: {
     ...typography.small,
@@ -596,11 +1154,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     paddingHorizontal: 14,
-    backgroundColor: colors.brand.primarySoft
+    backgroundColor: colors.surface.muted
+  },
+  voiceButtonActive: {
+    backgroundColor: colors.brand.primary
+  },
+  voiceButtonUnavailable: {
+    backgroundColor: colors.statusSoft.watch
+  },
+  voiceButtonPressed: {
+    opacity: 0.88
   },
   voiceText: {
     ...typography.label,
-    color: colors.brand.primaryDark
+    color: colors.text.secondary
+  },
+  voiceTextActive: {
+    color: colors.text.inverse
+  },
+  voiceTextUnavailable: {
+    color: colors.status.watch
+  },
+  voiceHint: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginTop: 10
+  },
+  voiceHintWarning: {
+    color: colors.status.watch
   },
   parseButton: {
     flex: 1
@@ -619,29 +1200,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10
   },
-  progressIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  progressDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFFAA"
+    backgroundColor: colors.border.subtle
   },
-  progressIconDone: {
+  progressDotDone: {
     backgroundColor: colors.brand.primary
   },
-  progressIconActive: {
-    borderWidth: 1,
+  progressDotActive: {
+    backgroundColor: colors.brand.primarySoft,
+    borderWidth: 1.5,
     borderColor: colors.brand.primary
-  },
-  progressNumber: {
-    ...typography.small,
-    color: colors.text.secondary,
-    fontWeight: "800"
   },
   progressText: {
     ...typography.helper,
-    color: colors.text.primary
+    color: colors.text.secondary
+  },
+  progressTextDone: {
+    color: colors.text.muted
   },
   summaryGrid: {
     marginTop: 14,
@@ -657,9 +1237,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12
   },
   summaryLabel: {
-    ...typography.label,
-    width: 64,
-    color: colors.brand.primaryDark
+    ...typography.helper,
+    width: 56,
+    color: colors.text.muted,
+    fontWeight: "400" as const
   },
   summaryValue: {
     ...typography.helper,
@@ -685,21 +1266,24 @@ const styles = StyleSheet.create({
     marginTop: 10
   },
   badScript: {
-    borderRadius: 16,
+    borderRadius: 14,
     padding: 12,
-    backgroundColor: colors.statusSoft.alert,
-    marginTop: 14
+    paddingLeft: 14,
+    backgroundColor: colors.surface.muted,
+    marginTop: 14,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border.strong
   },
   goodScript: {
-    borderRadius: 16,
+    borderRadius: 14,
     padding: 12,
     backgroundColor: colors.statusSoft.calm,
     marginTop: 10
   },
   badScriptLabel: {
     ...typography.small,
-    fontWeight: "800",
-    color: colors.status.alert
+    fontWeight: "600" as const,
+    color: colors.text.muted
   },
   goodScriptLabel: {
     ...typography.small,
@@ -734,6 +1318,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface.card,
     ...shadow.sheet
   },
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border.subtle,
+    alignSelf: "center",
+    marginBottom: 16
+  },
   sheetTitle: {
     ...typography.cardTitle,
     color: colors.text.primary
@@ -745,15 +1337,34 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 12
   },
+  toastWrap: {
+    position: "absolute",
+    bottom: 24,
+    left: 16,
+    right: 16,
+    zIndex: 100,
+    alignItems: "center"
+  },
   toast: {
-    borderRadius: 16,
-    backgroundColor: colors.brand.primary,
-    padding: 12,
-    marginBottom: 12
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 20,
+    backgroundColor: colors.surface.card,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    ...shadow.card
+  },
+  toastDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.brand.primary
   },
   toastText: {
     ...typography.helper,
-    fontWeight: "800",
-    color: colors.text.inverse
+    fontWeight: "500" as const,
+    color: colors.text.primary,
+    flex: 1
   }
 });

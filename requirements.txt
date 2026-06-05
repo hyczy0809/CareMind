@@ -1,6 +1,7 @@
 # Web framework
 fastapi
 uvicorn
+python-multipart
 
 # Core dependencies
 google-adk
