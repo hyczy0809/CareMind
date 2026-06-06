@@ -14,8 +14,11 @@
       }
     },
     "android": {
+      "package": "com.caremind.app",
+      "versionCode": 1,
       "permissions": [
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "INTERNET"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#F7F4EE"
