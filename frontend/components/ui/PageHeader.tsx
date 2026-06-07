@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Settings } from "lucide-react-native";
 import { router } from "expo-router";
-import { colors, hitSlop, typography } from "../../lib/theme";
+import { colors, hitSlop, shadow, typography } from "../../lib/theme";
 
 interface PageHeaderProps {
   title: string;
@@ -58,11 +58,12 @@ const styles = StyleSheet.create({
   settingsButton: {
     width: 44,
     height: 44,
-    borderRadius: 12,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.surface.card,
     borderWidth: 1,
-    borderColor: colors.border.subtle
+    borderColor: colors.border.subtle,
+    ...shadow.soft
   }
 });

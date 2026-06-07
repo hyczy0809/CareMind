@@ -41,7 +41,7 @@ const toneStyles = {
 const styles = StyleSheet.create({
   pill: {
     minHeight: 32,
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",

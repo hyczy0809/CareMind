@@ -542,7 +542,7 @@ function MagicLogInput({
   const voiceLabel = voiceState === "listening" ? "正在听" : voiceState === "transcribing" ? "转写中" : "按住说话";
 
   return (
-    <Card>
+    <Card tone="brand">
       <Text style={styles.cardTitle}>今天 {nickname} 有什么让你担心的事吗？</Text>
       <Text style={styles.body}>写一句话就够了，也可以直接粘贴家属聊天记录。</Text>
       <EventTimeButton eventAt={eventAt} onChange={onChangeEventAt} />
@@ -1004,7 +1004,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: colors.statusSoft.info,
     borderWidth: 1,
-    borderColor: "#C7DDED",
+    borderColor: "#C9D8E2",
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -1023,14 +1023,14 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF99"
+    backgroundColor: "rgba(255,253,248,0.74)"
   },
   eventTimeButton: {
     minHeight: 58,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: colors.statusSoft.calm,
+    backgroundColor: "rgba(255,253,248,0.74)",
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -1043,7 +1043,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.72)"
+    backgroundColor: "rgba(255,253,248,0.74)"
   },
   eventTimeCopy: {
     flex: 1
@@ -1067,7 +1067,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: "rgba(255,253,248,0.78)",
     padding: 14,
     marginTop: 14,
     ...typography.body,
@@ -1098,7 +1098,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: colors.surface.card,
     paddingHorizontal: 14,
     ...typography.body,
     color: colors.text.primary
@@ -1119,12 +1119,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.brand.primarySoft
+    backgroundColor: "rgba(255,253,248,0.76)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle
   },
   quickChipText: {
     ...typography.small,
     fontWeight: "800",
-    color: colors.brand.primaryDark
+    color: colors.text.secondary
   },
   inputActions: {
     flexDirection: "row",
@@ -1140,7 +1142,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     paddingHorizontal: 14,
-    backgroundColor: colors.surface.muted
+    backgroundColor: "rgba(255,253,248,0.76)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle
   },
   voiceButtonActive: {
     backgroundColor: colors.brand.primary
