@@ -829,8 +829,6 @@ export function SmartLogScreen() {
     patient,
     memoryItems,
     recordCount,
-    lastRawNote,
-    lastStructuredLog,
     previewStructuredLog,
     previewMemoryCandidate,
     saveLog,
@@ -845,21 +843,10 @@ export function SmartLogScreen() {
   const [inputError, setInputError] = useState<string | null>(null);
   const [boundaryDismissed, setBoundaryDismissed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [hydratedInitialLog, setHydratedInitialLog] = useState(false);
   const headerDateTime = useMemo(() => formatHeaderDateTime(), []);
   const similarMemory = useMemo(() => memoryItems.find((item) => item.status === "confirmed"), [memoryItems]);
   const scriptAdvice = parsedLog ? buildScriptAdvice(value, parsedLog) : null;
   const showBoundary = !boundaryDismissed && medicalKeywords.test(value);
-
-  useEffect(() => {
-    if (hydratedInitialLog || parseState !== "idle" || !lastRawNote || !lastStructuredLog) return;
-    setValue(lastRawNote);
-    setParsedLog(lastStructuredLog);
-    setCandidate(previewMemoryCandidate(lastRawNote));
-    setCompletedSteps(progressSteps.length);
-    setParseState("saved");
-    setHydratedInitialLog(true);
-  }, [hydratedInitialLog, lastRawNote, lastStructuredLog, parseState, previewMemoryCandidate]);
 
   function showToast(text: string) {
     setToast(text);
