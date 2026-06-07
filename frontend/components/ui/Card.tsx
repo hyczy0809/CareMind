@@ -16,10 +16,33 @@ const accentColors = {
   info: colors.status.info
 };
 
+const toneStyles = {
+  default: {
+    backgroundColor: colors.surface.card,
+    borderColor: colors.border.subtle
+  },
+  brand: {
+    backgroundColor: colors.surface.brand,
+    borderColor: "#CFE4D2"
+  },
+  watch: {
+    backgroundColor: colors.surface.watch,
+    borderColor: "#EBD39B"
+  },
+  alert: {
+    backgroundColor: colors.surface.alert,
+    borderColor: "#E8B4A4"
+  },
+  info: {
+    backgroundColor: colors.statusSoft.info,
+    borderColor: "#C9D8E2"
+  }
+};
+
 export function Card({ children, tone = "default", padded = true }: CardProps) {
   const accentColor = accentColors[tone];
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, toneStyles[tone]]}>
       {accentColor ? (
         <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
       ) : null}
@@ -32,12 +55,10 @@ export function Card({ children, tone = "default", padded = true }: CardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.surface.card,
     borderRadius: radius.xl,
-    marginBottom: 12,
+    marginBottom: 13,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: colors.border.subtle,
     ...shadow.card
   },
   accentBar: {
@@ -45,14 +66,14 @@ const styles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    width: 4,
+    width: 3,
     borderTopLeftRadius: radius.xl,
     borderBottomLeftRadius: radius.xl
   },
   padded: {
-    padding: 15
+    padding: 16
   },
   paddedWithAccent: {
-    paddingLeft: 19
+    paddingLeft: 20
   }
 });

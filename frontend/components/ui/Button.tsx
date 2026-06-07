@@ -41,7 +41,7 @@ export function Button({
         styles.base,
         variantStyle,
         (disabled || loading) && styles.disabled,
-        pressed && !disabled ? styles.pressed : null
+        pressed && !disabled && !loading ? styles.pressed : null
       ]}
     >
       {loading ? <ActivityIndicator color={variant === "primary" ? "#FFFFFF" : colors.brand.primary} /> : null}
@@ -56,7 +56,7 @@ export function Button({
 const styles = StyleSheet.create({
   base: {
     minHeight: 50,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -70,11 +70,11 @@ const styles = StyleSheet.create({
     borderColor: colors.brand.primary
   },
   secondary: {
-    backgroundColor: colors.brand.primarySoft,
-    borderColor: "#BFE3D2"
+    backgroundColor: colors.surface.info,
+    borderColor: "#E7CBB0"
   },
   ghost: {
-    backgroundColor: "transparent",
+    backgroundColor: "rgba(255,253,248,0.58)",
     borderColor: colors.border.subtle
   },
   danger: {
@@ -85,7 +85,8 @@ const styles = StyleSheet.create({
     opacity: 0.50
   },
   pressed: {
-    opacity: 0.86
+    opacity: 0.88,
+    transform: [{ scale: 0.985 }]
   },
   label: {
     ...typography.label

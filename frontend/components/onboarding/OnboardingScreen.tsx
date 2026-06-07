@@ -830,7 +830,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     marginTop: 8,
-    marginBottom: 32
+    marginBottom: 28
   },
   brandName: {
     ...typography.label,
@@ -841,7 +841,9 @@ const styles = StyleSheet.create({
   },
   slidePill: {
     alignSelf: "flex-start",
-    backgroundColor: colors.brand.primarySoft,
+    backgroundColor: colors.surface.info,
+    borderWidth: 1,
+    borderColor: "#E7CBB0",
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 5,
@@ -850,7 +852,7 @@ const styles = StyleSheet.create({
   slidePillText: {
     ...typography.small,
     fontWeight: "700" as const,
-    color: colors.brand.primaryDark
+    color: colors.brand.warm
   },
   heroIconWrap: {
     width: 64,
@@ -859,6 +861,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.brand.primarySoft,
+    borderWidth: 1,
+    borderColor: "#CFE4D2",
     marginBottom: 20
   },
   slideTitle: {
@@ -875,13 +879,19 @@ const styles = StyleSheet.create({
   },
   featureList: {
     gap: 0,
-    marginTop: 4
+    marginTop: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: "rgba(255,253,248,0.72)",
+    overflow: "hidden"
   },
   featureRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
-    paddingVertical: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: colors.border.subtle
   },
@@ -987,7 +997,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: "rgba(255,253,248,0.72)",
     paddingHorizontal: 14,
     ...typography.body,
     color: colors.text.primary
@@ -1007,7 +1017,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: colors.statusSoft.calm,
+    backgroundColor: colors.surface.info,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -1020,7 +1030,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.72)"
+    backgroundColor: "rgba(255,253,248,0.74)"
   },
   uploadCopy: {
     flex: 1
@@ -1041,12 +1051,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.brand.primarySoft
+    backgroundColor: "rgba(255,253,248,0.72)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle
   },
   chipText: {
     ...typography.small,
     fontWeight: "700",
-    color: colors.brand.primaryDark
+    color: colors.text.secondary
   },
   chipSelected: {
     backgroundColor: colors.brand.primary

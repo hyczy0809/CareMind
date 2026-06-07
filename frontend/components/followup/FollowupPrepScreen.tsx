@@ -35,7 +35,6 @@ import { Card } from "../ui/Card";
 import { PageHeader } from "../ui/PageHeader";
 import { Pill } from "../ui/Pill";
 import { Screen } from "../ui/Screen";
-import { SectionTitle } from "../ui/SectionTitle";
 import { MemoryUsedPill } from "../memory/MemoryUsedPill";
 
 type Range = "7d" | "30d" | "custom";
@@ -934,7 +933,6 @@ export function FollowupPrepScreen() {
       <PageHeader title="复诊准备" subtitle="把照护记录和复诊资料整理成医生能看的摘要" />
       {hasReportContent ? <MemoryUsedPill label="已读取已保存记录、已记住方法和已确认资料" /> : null}
       <View style={styles.spacer} />
-      <SectionTitle title="复诊资料补充" helper="上传资料或手动填写摘要" />
       <DocumentSupplementEntryCard />
       {recordCount >= 3 ? <RangeSelector range={range} onChange={handleRangeChange} /> : null}
 
@@ -1017,9 +1015,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     justifyContent: "center",
     paddingHorizontal: 12,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
-    borderColor: "#C7DDED"
+    borderColor: "#C9D8E2"
   },
   documentChipSelected: {
     backgroundColor: colors.status.info,
@@ -1044,16 +1042,16 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     padding: 12,
     ...typography.helper,
     color: colors.text.primary
   },
   documentBoundaryBox: {
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
-    borderColor: "#C7DDED",
+    borderColor: "#C9D8E2",
     padding: 10,
     marginTop: 14
   },
@@ -1305,7 +1303,7 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    backgroundColor: colors.surface.card,
+    backgroundColor: colors.surface.elevated,
     padding: 16,
     paddingBottom: 30
   },
@@ -1332,7 +1330,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: colors.surface.card,
     padding: 12,
     marginTop: 14,
     ...typography.helper,

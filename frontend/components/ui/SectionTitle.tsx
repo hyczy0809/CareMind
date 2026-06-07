@@ -17,7 +17,7 @@ export function SectionTitle({ title, helper }: SectionTitleProps) {
 
 const styles = StyleSheet.create({
   container: {
-    marginTop: 14,
+    marginTop: 16,
     marginBottom: 8
   },
   title: {
@@ -26,7 +26,7 @@ const styles = StyleSheet.create({
   },
   helper: {
     ...typography.small,
-    color: colors.text.secondary,
+    color: colors.text.muted,
     marginTop: 2
   }
 });

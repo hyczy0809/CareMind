@@ -126,7 +126,7 @@ const moodAfterOptions = [
 
 function EmptyTodayCard() {
   return (
-    <Card>
+    <Card tone="brand">
       <View style={styles.headerRow}>
         <ShieldCheck color={colors.brand.primaryDark} size={20} />
         <Text style={styles.cardTitle}>今天发生了什么？30 秒记一条。</Text>
@@ -474,7 +474,7 @@ function CaregiverFourDimCheckin({ onSave }: { onSave: (checkin: CaregiverChecki
   }
 
   return (
-    <Card>
+    <Card tone="info">
       <View style={styles.headerRow}>
         <HeartPulse color={colors.brand.primaryDark} size={20} />
         <Text style={styles.cardTitle}>顺手记一下你的状态</Text>
@@ -525,7 +525,7 @@ function MoodTrendChart({ checkins }: { checkins: CaregiverCheckinRecord[] }) {
   const highCount = ordered.filter((item) => item.stressLevel === "high" || item.stressLevel === "crisis").length;
 
   return (
-    <Card>
+    <Card tone="info">
       <View style={styles.headerRow}>
         <TrendingUp color={colors.status.info} size={20} />
         <Text style={styles.cardTitle}>近 7 天你的状态</Text>
@@ -817,7 +817,7 @@ const styles = StyleSheet.create({
   },
   recommendationBox: {
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
     borderColor: colors.border.subtle,
     padding: 10,
@@ -829,7 +829,7 @@ const styles = StyleSheet.create({
   },
   activityLastBox: {
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
     borderColor: colors.border.subtle,
     padding: 10,
@@ -854,7 +854,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
-    backgroundColor: "rgba(255,255,255,0.62)",
+    backgroundColor: "rgba(255,253,248,0.64)",
     justifyContent: "center",
     paddingHorizontal: 12,
     paddingVertical: 10
@@ -889,9 +889,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     justifyContent: "center",
     paddingHorizontal: 12,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
-    borderColor: "#BFE3D2"
+    borderColor: "#CFE4D2"
   },
   activityPreviewText: {
     ...typography.small,
@@ -900,7 +900,7 @@ const styles = StyleSheet.create({
   },
   boundaryBox: {
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
     borderColor: colors.border.subtle,
     padding: 10,
@@ -908,7 +908,7 @@ const styles = StyleSheet.create({
   },
   activityFlowBox: {
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
     borderColor: colors.border.subtle,
     padding: 12,
@@ -1008,9 +1008,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 10,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: "rgba(255,253,248,0.74)",
     borderWidth: 1,
-    borderColor: "transparent"
+    borderColor: colors.border.subtle
   },
   choiceActive: {
     backgroundColor: colors.brand.primarySoft,
@@ -1027,7 +1027,7 @@ const styles = StyleSheet.create({
   adviceBox: {
     marginTop: 16,
     borderRadius: 14,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: "rgba(255,253,248,0.74)",
     padding: 12,
     flexDirection: "row",
     gap: 10,
@@ -1077,7 +1077,7 @@ const styles = StyleSheet.create({
   },
   evidenceBox: {
     borderRadius: 14,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: "rgba(255,253,248,0.74)",
     padding: 12,
     marginTop: 14
   },
@@ -1090,7 +1090,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 14,
-    backgroundColor: colors.surface.muted,
+    backgroundColor: "rgba(255,253,248,0.74)",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
     paddingHorizontal: 8,
     marginBottom: 8
   },

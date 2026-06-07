@@ -33,6 +33,7 @@ interface PatientState {
 
 interface PersistedCareMindState {
   version: 2;
+  onboardingCompleted?: boolean;
   patient: PatientState;
   recordCount: number;
   attentionItems: AttentionItem[];
@@ -47,6 +48,8 @@ interface PersistedCareMindState {
 }
 
 interface CareMindContextValue {
+  hydrated: boolean;
+  onboardingCompleted: boolean;
   patient: PatientState;
   recordCount: number;
   attentionItems: AttentionItem[];
@@ -317,6 +320,7 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
   const [lastStructuredLog, setLastStructuredLog] = useState<StructuredLog | null>(null);
   const [lastRawNote, setLastRawNote] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [onboardingCompleted, setOnboardingCompleted] = useState(false);
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -330,10 +334,17 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
         }
 
         const parsed = JSON.parse(raw) as Partial<PersistedCareMindState>;
+        const restoredCareLogs = normalizeCareLogs(parsed.careLogs, parsed.lastRawNote, parsed.lastStructuredLog, parsed.attentionItems, parsed.patient?.id);
+        const inferredCompleted =
+          restoredCareLogs.length > 0 ||
+          (typeof parsed.recordCount === "number" && parsed.recordCount > 0) ||
+          (!!parsed.patient?.nickname && parsed.patient.nickname !== defaultPatient.nickname);
+        const nextOnboardingCompleted = parsed.onboardingCompleted ?? inferredCompleted;
+        setOnboardingCompleted(Boolean(nextOnboardingCompleted));
         setPatient(parsed.patient ? { ...defaultPatient, ...parsed.patient } : defaultPatient);
         setRecordCount(typeof parsed.recordCount === "number" ? parsed.recordCount : 0);
         setAttentionItems(dedupeAttentionItems(Array.isArray(parsed.attentionItems) ? parsed.attentionItems : []));
-        setCareLogs(normalizeCareLogs(parsed.careLogs, parsed.lastRawNote, parsed.lastStructuredLog, parsed.attentionItems, parsed.patient?.id));
+        setCareLogs(restoredCareLogs);
         setAnalyticsEvents(Array.isArray(parsed.analyticsEvents) ? parsed.analyticsEvents.slice(0, 100) : []);
         setMemoryItems(Array.isArray(parsed.memoryItems) ? parsed.memoryItems : []);
         setCaregiverCheckins(Array.isArray(parsed.caregiverCheckins) ? parsed.caregiverCheckins : []);
@@ -367,6 +378,7 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
     persistTimer.current = setTimeout(() => {
       const state: PersistedCareMindState = {
         version: 2,
+        onboardingCompleted,
         patient,
         recordCount,
         attentionItems,
@@ -398,6 +410,7 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
     companionActivityRecords,
     followupDocuments,
     hydrated,
+    onboardingCompleted,
     lastRawNote,
     lastStructuredLog,
     memoryItems,
@@ -488,6 +501,7 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
       updatedAt: concern ? "刚刚更新" : "尚未记录",
       doctorNote: input.doctorNote
     });
+    setOnboardingCompleted(true);
 
     if (concern) {
       const structured = buildStructuredLog(concern);
@@ -638,6 +652,7 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
   function loadDemoData() {
     const demo = buildDemoState();
 
+    setOnboardingCompleted(true);
     setPatient(demo.patient);
     setRecordCount(demo.careLogs.length);
     setAttentionItems(dedupeAttentionItems(demo.attentionItems));
@@ -654,6 +669,8 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
   const followupMetrics = useMemo(() => buildFollowupMetrics(recordCount, attentionItems, memoryItems), [recordCount, attentionItems, memoryItems]);
 
   const value: CareMindContextValue = {
+    hydrated,
+    onboardingCompleted,
     patient,
     recordCount,
     attentionItems,

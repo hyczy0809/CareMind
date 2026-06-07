@@ -1,37 +1,43 @@
 export const colors = {
   brand: {
-    primary: "#1F9D74",
-    primaryDark: "#0F6F55",
-    primarySoft: "#DDF4EA"
+    primary: "#238663",
+    primaryDark: "#245847",
+    primarySoft: "#E8F3E8",
+    warm: "#D98253",
+    warmSoft: "#FFF1E5"
   },
   surface: {
-    app: "#F7F4EE",
-    card: "#FFFFFF",
-    muted: "#F1EFE8",
+    app: "#FAF5EC",
+    wash: "#F4EFE5",
+    card: "#FFFDF8",
+    muted: "#F2ECE2",
     elevated: "#FFFFFF",
-    info: "#FFF7EC"
+    info: "#FFF1E5",
+    brand: "#F1F8F1",
+    watch: "#FFF5DC",
+    alert: "#FFF0EA"
   },
   text: {
-    primary: "#1F2933",
-    secondary: "#52616B",
-    muted: "#7B8794",
+    primary: "#2B241D",
+    secondary: "#655A4F",
+    muted: "#8A7F73",
     inverse: "#FFFFFF"
   },
   status: {
-    calm: "#1F9D74",
-    watch: "#D97706",
-    alert: "#D95C45",
-    info: "#3478A7"
+    calm: "#238663",
+    watch: "#B56A18",
+    alert: "#C8503B",
+    info: "#476F92"
   },
   statusSoft: {
-    calm: "#DDF4EA",
-    watch: "#FFF3D6",
-    alert: "#FDE7E1",
-    info: "#E3F2FD"
+    calm: "#E8F3E8",
+    watch: "#FFF5DC",
+    alert: "#FFF0EA",
+    info: "#EAF1F6"
   },
   border: {
-    subtle: "#E4E0D8",
-    strong: "#C9C2B8"
+    subtle: "#E7DCCF",
+    strong: "#D2BFAE"
   }
 } as const;
 
@@ -40,7 +46,8 @@ export const radius = {
   md: 10,
   lg: 12,
   xl: 14,
-  xxl: 18
+  xxl: 18,
+  pill: 999
 } as const;
 
 export const spacing = {
@@ -59,16 +66,23 @@ export const hitSlop = {
 
 export const shadow = {
   card: {
-    shadowColor: "#3A2D23",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
+    shadowColor: "#7A5B42",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.07,
+    shadowRadius: 20,
     elevation: 2
   },
+  soft: {
+    shadowColor: "#7A5B42",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 1
+  },
   sheet: {
-    shadowColor: "#3A2D23",
+    shadowColor: "#4E3929",
     shadowOffset: { width: 0, height: -12 },
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.13,
     shadowRadius: 24,
     elevation: 8
   }
@@ -76,8 +90,8 @@ export const shadow = {
 
 export const typography = {
   pageTitle: {
-    fontSize: 24,
-    lineHeight: 32,
+    fontSize: 25,
+    lineHeight: 33,
     fontWeight: "700" as const
   },
   cardTitle: {
