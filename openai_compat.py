@@ -454,7 +454,9 @@ def setup_openai_routes(app, agent, session_service, app_name: str = "my_agent")
         user_id = http_request.headers.get("X-User-ID", "default")
 
         # 添加日志 - 使用文件确保输出
-        with open('request_log.txt', 'a', encoding='utf-8') as f:
+        log_path = os.path.join(os.getenv("CAREMIND_RUNTIME_DIR", "/tmp/caremind"), "request_log.txt")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'a', encoding='utf-8') as f:
             f.write(f"[{time.time()}] Received: session={session_id}, user={user_id}, stream={request.stream}\n")
 
         logger.info(f"=== Received request: session_id={session_id}, user_id={user_id}, stream={request.stream} ===")

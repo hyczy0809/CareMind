@@ -22,7 +22,7 @@ from .memory_schema import (
     default_patient_profile,
 )
 
-_STORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory_store")
+_STORE_DIR = os.getenv("CAREMIND_MEMORY_DIR", "/tmp/caremind/memory_store")
 _lock = threading.Lock()
 
 

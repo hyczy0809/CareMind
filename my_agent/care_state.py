@@ -9,9 +9,10 @@ class CareStateManager:
     """Small JSON-backed cloud-side care memory for the ADK demo."""
 
     def __init__(self):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.base_dir = os.getenv("CARE_STATE_DIR", "/tmp/caremind")
         self.file_path = os.path.join(self.base_dir, "care_state.json")
         self.lock = threading.Lock()
+        os.makedirs(self.base_dir, exist_ok=True)
         if not os.path.exists(self.file_path):
             self._save(self._initial_state())
 

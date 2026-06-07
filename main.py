@@ -31,7 +31,10 @@ ADK_LOAD_ERROR = None
 # =========================
 app = FastAPI(title="CareMind API")
 
-UPLOAD_ROOT = Path(os.environ.get("CAREMIND_UPLOAD_DIR", "uploads/medical_documents"))
+RUNTIME_ROOT = Path(os.environ.get("CAREMIND_RUNTIME_DIR", "/tmp/caremind"))
+UPLOAD_ROOT = Path(
+    os.environ.get("CAREMIND_UPLOAD_DIR", str(RUNTIME_ROOT / "uploads" / "medical_documents"))
+)
 DOCUMENT_INDEX_PATH = UPLOAD_ROOT.parent / "document_index.json"
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
