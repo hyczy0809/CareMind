@@ -645,6 +645,209 @@ async def followup_summary(request: FollowupSummaryRequest) -> FollowupSummaryRe
     return generate_followup_summary(request)
 
 
+# =========================
+# On-device model catalog (privacy mode)
+# =========================
+# The mobile app, when 隐私模式 is enabled, picks a model from this catalog
+# and downloads the corresponding weight file from /api/models/<filename>.
+# Files are discovered by scanning a directory (default = repo root) for
+# `.litertlm` / `.task` extensions, so adding a new model is a drop-in:
+# just put the file in the directory and restart.
+#
+# Set CAREMIND_GEMMA_MODEL_DIR to point elsewhere (e.g. a mounted volume).
+GEMMA_MODEL_DIR = Path(
+    os.environ.get(
+        "CAREMIND_GEMMA_MODEL_DIR",
+        str(Path(__file__).parent),
+    )
+).resolve()
+GEMMA_MODEL_EXTENSIONS = {".litertlm", ".task"}
+
+# A small static lookup keyed by exact filename. Drives the human-readable
+# display name and capability flags shown to the user in the picker.
+# Files not in this table still appear in the catalog with a fallback label.
+GEMMA_MODEL_REGISTRY: dict[str, dict] = {
+    "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm": {
+        "display_name": "Gemma 3 1B",
+        "description": "轻量文本模型（~560 MB）。适合中端机，速度快，不支持语音转写。",
+        "supports_audio": False,
+        "tier": "light",
+    },
+    "gemma-4-E2B-it.litertlm": {
+        "display_name": "Gemma 4 E2B",
+        "description": "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
+        "supports_audio": True,
+        "tier": "medium",
+    },
+    "gemma-4-E4B-it.litertlm": {
+        "display_name": "Gemma 4 E4B",
+        "description": "完整多模态模型（~3.5 GB）。质量最高，建议 8 GB+ 内存旗舰设备。",
+        "supports_audio": True,
+        "tier": "full",
+    },
+}
+
+
+def _resolve_model_file(filename: str) -> Path:
+    """Resolve a requested filename to a concrete file under the model dir.
+    Rejects path traversal (`..`, absolute paths, separators) outright."""
+    if not filename or "/" in filename or "\\" in filename or filename.startswith(".."):
+        raise HTTPException(status_code=400, detail=f"非法的模型文件名：{filename}")
+    candidate = (GEMMA_MODEL_DIR / filename).resolve()
+    # Defence in depth — make sure the resolved path is still inside the dir.
+    try:
+        candidate.relative_to(GEMMA_MODEL_DIR)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法的模型路径")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
+    if candidate.suffix.lower() not in GEMMA_MODEL_EXTENSIONS:
+        raise HTTPException(status_code=415, detail=f"不支持的模型格式：{candidate.suffix}")
+    return candidate
+
+
+def _build_model_entry(path: Path) -> dict:
+    stat = path.stat()
+    registry = GEMMA_MODEL_REGISTRY.get(path.name, {})
+    return {
+        "id": path.name,                       # stable ID = filename
+        "filename": path.name,
+        "display_name": registry.get("display_name", path.stem),
+        "description": registry.get("description", ""),
+        "supports_audio": bool(registry.get("supports_audio", False)),
+        "tier": registry.get("tier", "unknown"),
+        "size_bytes": stat.st_size,
+        "format": path.suffix.lstrip("."),
+        "download_path": f"/api/models/{path.name}",
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/models")
+async def list_models():
+    """Return all on-device models that are currently servable from this
+    backend. The mobile app uses this to render the model picker inside the
+    privacy-mode card; if the backend has no models, the picker is empty
+    and privacy mode silently stays off."""
+    if not GEMMA_MODEL_DIR.exists():
+        return {"models": [], "model_dir": str(GEMMA_MODEL_DIR)}
+    entries: list[dict] = []
+    for path in sorted(GEMMA_MODEL_DIR.iterdir()):
+        if path.is_file() and path.suffix.lower() in GEMMA_MODEL_EXTENSIONS:
+            entries.append(_build_model_entry(path))
+    return {"models": entries, "model_dir": str(GEMMA_MODEL_DIR)}
+
+
+@app.get("/api/models/{filename}/meta")
+async def model_meta(filename: str):
+    """Quick metadata probe so the app can show a friendly size hint before
+    starting a multi-GB download."""
+    return _build_model_entry(_resolve_model_file(filename))
+
+
+@app.get("/api/models/{filename}")
+async def model_download(filename: str):
+    """Stream a specific on-device weight file. The mobile app picks one
+    from /api/models and downloads it here. No auth — same trust boundary
+    as the rest of /api/*."""
+    path = _resolve_model_file(filename)
+    size_bytes = path.stat().st_size
+
+    def iterfile():
+        # 1 MiB chunks balance throughput vs. memory for slow mobile uplinks.
+        with path.open("rb") as fp:
+            while True:
+                chunk = fp.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    from fastapi.responses import StreamingResponse
+
+    return StreamingResponse(
+        iterfile(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Length": str(size_bytes),
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+            "X-Model-Format": path.suffix.lstrip(".") or "bin",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
+# ----- Backwards-compatible legacy aliases -----------------------------------
+# The first APK build used /api/models/gemma and /api/models/gemma/meta hard-
+# coded against gemma-4-E4B-it.litertlm. Keep them alive so an already-
+# installed app keeps working until users update.
+_LEGACY_DEFAULT_MODEL = "gemma-4-E4B-it.litertlm"
+
+
+@app.get("/api/models/gemma/meta")
+async def legacy_gemma_meta():
+    return await model_meta(_LEGACY_DEFAULT_MODEL)
+
+
+@app.get("/api/models/gemma")
+async def legacy_gemma_download():
+    return await model_download(_LEGACY_DEFAULT_MODEL)
+
+
+# =========================
+# On-device inference telemetry (privacy mode)
+# =========================
+# When the app runs in 隐私模式 the actual prompts, user notes, model outputs,
+# and audio NEVER leave the device. But the user (and we, debugging) still
+# want some signal that on-device inference happened and worked. This endpoint
+# accepts a strictly bounded set of *metadata* — task name, model id, success
+# flag, elapsed ms, and message LENGTHS (never content). The backend logs it
+# to the same uvicorn access log so a developer can grep for "ondevice".
+#
+# What's allowed:
+#   task            "care_workflow" | "guardrail" | "followup" | "audio"
+#   model_id        the .litertlm / .task filename
+#   success         bool
+#   elapsed_ms      int (>=0)
+#   input_chars     int (>=0) — length only, no content
+#   output_chars    int (>=0) — length only, no content
+#   fell_back       bool — whether the local adapter dropped to its regex fallback
+#   error_kind      optional, short string like "json_parse_failed", "engine_init_failed"
+#
+# What is explicitly REJECTED so this cannot become a leak vector:
+#   any field longer than 64 chars; nested objects / arrays; unknown fields.
+
+class OnDeviceTelemetry(BaseModel):
+    task: Literal["care_workflow", "guardrail", "followup", "audio"]
+    model_id: str
+    success: bool
+    elapsed_ms: int = 0
+    input_chars: int = 0
+    output_chars: int = 0
+    fell_back: bool = False
+    error_kind: str | None = None
+
+
+@app.post("/api/telemetry/ondevice")
+async def on_device_telemetry(payload: OnDeviceTelemetry):
+    if len(payload.model_id) > 128 or any(
+        len(s) > 64 for s in [payload.error_kind or ""]
+    ):
+        raise HTTPException(status_code=400, detail="字段过长，拒绝接收")
+    if payload.elapsed_ms < 0 or payload.input_chars < 0 or payload.output_chars < 0:
+        raise HTTPException(status_code=400, detail="数值字段必须非负")
+
+    status = "ok" if payload.success else "fail"
+    fb = " fallback" if payload.fell_back else ""
+    err = f" err={payload.error_kind}" if payload.error_kind else ""
+    print(
+        f"[ondevice] task={payload.task} model={payload.model_id} {status}{fb}"
+        f" elapsed={payload.elapsed_ms}ms in={payload.input_chars}c"
+        f" out={payload.output_chars}c{err}",
+        flush=True,
+    )
+    return {"received": True}
+
+
 @app.get("/health")
 async def health():
     """Health check for frontend integration and deployment probes."""

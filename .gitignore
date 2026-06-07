@@ -43,3 +43,9 @@ frontend/dist/
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+
+# On-device LLM weights — too large for git (≥3 GB).
+# Place models under /models or at repo root; both are excluded.
+*.task
+*.litertlm
+models/

@@ -8,6 +8,7 @@ import { PageHeader } from "../ui/PageHeader";
 import { Pill } from "../ui/Pill";
 import { Screen } from "../ui/Screen";
 import { SectionTitle } from "../ui/SectionTitle";
+import { PrivacyModeCard } from "./PrivacyModeCard";
 
 function statusLabel(status: string) {
   switch (status) {
@@ -89,6 +90,9 @@ export function MemorySettingsScreen() {
   return (
     <Screen>
       <PageHeader title="已记住的信息" subtitle={`${patient.nickname} · 可随时编辑或删除`} right={<View />} />
+      <SectionTitle title="隐私模式" helper="决定 AI 推理是否完全在本机进行" />
+      <PrivacyModeCard />
+      <SectionTitle title="关于已记住的信息" />
       <Card tone="info">
         <Text style={styles.body}>这些信息用于让 CareMind 更了解你的家庭照护情况。医疗结论和用药信息不会由 CareMind 自动推断。</Text>
       </Card>

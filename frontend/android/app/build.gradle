@@ -173,4 +173,9 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // CareMind: on-device LLM inference (Gemma .litertlm / .task via MediaPipe).
+    // Used only when the user opts into 隐私模式 (privacy mode) in settings.
+    implementation 'com.google.mediapipe:tasks-genai:0.10.27'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }
