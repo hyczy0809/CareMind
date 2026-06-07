@@ -9,6 +9,8 @@ import { buildTranscriptionPrompt } from "./prompts";
 import { TRANSCRIPTION_MAX_TOKENS, DEFAULT_TEMPERATURE, DEFAULT_TOP_K } from "./constants";
 import { reportOnDeviceInference } from "./telemetry";
 
+const LOCAL_GEMMA_AUDIO_ENABLED = process.env.EXPO_PUBLIC_CAREMIND_ENABLE_LOCAL_AUDIO === "1";
+
 function toLocalPath(uri: string): string {
   if (uri.startsWith("file://")) return uri.slice("file://".length);
   return uri;
@@ -24,6 +26,11 @@ export async function transcribeAudioNoteLocal(
   let errorKind: string | undefined;
 
   try {
+    if (!LOCAL_GEMMA_AUDIO_ENABLED) {
+      errorKind = "local_audio_disabled";
+      throw new Error("隐私模式下暂不启用本地语音转文字，请先手动输入，或关闭隐私模式后使用系统语音识别。");
+    }
+
     filename = await ensureEngine();
 
     const language = input.language ?? "zh";

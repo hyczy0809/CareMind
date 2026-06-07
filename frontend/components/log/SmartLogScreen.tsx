@@ -15,7 +15,17 @@ import {
 } from "lucide-react-native";
 import { useCareMind } from "../../lib/caremind-store";
 import { transcribeAudioNote } from "../../lib/care-workflow-api";
+import { isPrivacyMode } from "../../lib/inference/privacy-mode";
 import { selectionHaptic, successHaptic } from "../../lib/safe-haptics";
+import {
+  ANDROID_SPEECH_RECOGNITION_AVAILABLE,
+  cancelAndroidSpeechRecognition,
+  isAndroidSpeechRecognitionAvailable,
+  startAndroidSpeechRecognition,
+  stopAndroidSpeechRecognition,
+  subscribeAndroidSpeechError,
+  subscribeAndroidSpeechResult
+} from "../../lib/speech/android-speech";
 import { colors, hitSlop, shadow, typography } from "../../lib/theme";
 import type { AnalyticsEvent, MemoryItem, StructuredLog } from "../../types/caremind";
 import { Button } from "../ui/Button";
@@ -71,7 +81,6 @@ type BrowserSpeechRecognition = {
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 const progressSteps = ["整理今天发生的事", "找出值得留意的地方", "生成沟通建议", "记住有用的照护方式"];
-const quickChips = ["夜里起来了", "不肯吃饭", "说有人偷钱", "不肯吃药"];
 const medicalKeywords = /诊断|停药|换药|加药|减药|补药|MRI|CT|核磁|检查|处方|药量/;
 
 function wait(ms: number) {
@@ -281,6 +290,8 @@ function MagicLogInput({
   const finalTranscriptRef = useRef("");
   const voiceHadErrorRef = useRef(false);
   const nativeStopRequestedRef = useRef(false);
+  const androidSpeechStopRequestedRef = useRef(false);
+  const voiceStateRef = useRef<VoiceState>("idle");
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
 
@@ -289,13 +300,59 @@ function MagicLogInput({
   }, [value]);
 
   useEffect(() => {
+    voiceStateRef.current = voiceState;
+  }, [voiceState]);
+
+  useEffect(() => {
     return () => {
       recognitionRef.current?.abort();
       recognitionRef.current = null;
+      if (ANDROID_SPEECH_RECOGNITION_AVAILABLE) {
+        void cancelAndroidSpeechRecognition().catch(() => undefined);
+      }
       if (recordingRef.current) {
         void recordingRef.current.stopAndUnloadAsync().catch(() => undefined);
         recordingRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ANDROID_SPEECH_RECOGNITION_AVAILABLE) return;
+
+    const resultSub = subscribeAndroidSpeechResult((event) => {
+      const transcript = event.transcript?.trim() ?? "";
+      if (!transcript) return;
+
+      if (event.isFinal) {
+        androidSpeechStopRequestedRef.current = false;
+        appendTranscript(transcript);
+        setVoiceState("idle");
+        setVoiceHint("已转成文字，你可以继续补充或点“帮我整理”。");
+        onTrackVoiceEvent("voice_input_succeeded", {
+          platform: Platform.OS,
+          provider: "android_speech_recognizer",
+          transcript_length: transcript.length
+        });
+      } else {
+        setVoiceHint(`正在听：${transcript}`);
+      }
+    });
+
+    const errorSub = subscribeAndroidSpeechError((event) => {
+      androidSpeechStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint(event.message ?? "这次没有成功转成文字，可以再试一次或手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        provider: "android_speech_recognizer",
+        reason: event.message ?? "android_speech_error"
+      });
+    });
+
+    return () => {
+      resultSub.remove();
+      errorSub.remove();
     };
   }, []);
 
@@ -469,6 +526,86 @@ function MagicLogInput({
     }
   }
 
+  async function startAndroidSpeechInput() {
+    if (voiceStateRef.current === "transcribing") return;
+
+    androidSpeechStopRequestedRef.current = false;
+    setVoiceState("listening");
+    setVoiceHint("正在请求麦克风权限……");
+
+    try {
+      if (await isPrivacyMode()) {
+        setVoiceState("unsupported");
+        setVoiceHint("隐私模式下暂不启用语音转文字。你可以先手动输入，或关闭隐私模式后使用系统语音识别。");
+        onTrackVoiceEvent("voice_input_unsupported", {
+          platform: Platform.OS,
+          reason: "privacy_mode_audio_disabled"
+        });
+        return;
+      }
+
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        setVoiceState("error");
+        setVoiceHint("没有麦克风权限，请在系统设置里允许 CareMind 使用麦克风。");
+        onTrackVoiceEvent("voice_input_failed", {
+          platform: Platform.OS,
+          reason: "microphone_permission_denied"
+        });
+        return;
+      }
+
+      const available = await isAndroidSpeechRecognitionAvailable();
+      if (!available) {
+        unsupportedVoiceInput();
+        return;
+      }
+
+      await startAndroidSpeechRecognition("zh-CN");
+      setVoiceHint("正在听，松手后我会转成文字。");
+      onTrackVoiceEvent("voice_input_started", {
+        platform: Platform.OS,
+        provider: "android_speech_recognizer"
+      });
+
+      if (androidSpeechStopRequestedRef.current) {
+        await stopAndroidSpeechInput();
+      }
+    } catch (error) {
+      androidSpeechStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint(error instanceof Error ? error.message : "语音识别没有启动成功，可以先手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        provider: "android_speech_recognizer",
+        reason: error instanceof Error ? error.message : "android_speech_start_failed"
+      });
+    }
+  }
+
+  async function stopAndroidSpeechInput() {
+    if (voiceStateRef.current !== "listening") {
+      androidSpeechStopRequestedRef.current = true;
+      return;
+    }
+
+    setVoiceState("transcribing");
+    setVoiceHint("正在转成文字……");
+
+    try {
+      await stopAndroidSpeechRecognition();
+    } catch (error) {
+      androidSpeechStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint(error instanceof Error ? error.message : "语音识别停止失败，可以先手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        provider: "android_speech_recognizer",
+        reason: error instanceof Error ? error.message : "android_speech_stop_failed"
+      });
+    }
+  }
+
   async function stopNativeRecording() {
     const recording = recordingRef.current;
     if (!recording) {
@@ -526,12 +663,20 @@ function MagicLogInput({
       startWebSpeechInput();
       return;
     }
+    if (Platform.OS === "android") {
+      void startAndroidSpeechInput();
+      return;
+    }
     void startNativeRecording();
   }
 
   function stopVoiceInput() {
     if (Platform.OS === "web") {
       stopWebSpeechInput();
+      return;
+    }
+    if (Platform.OS === "android") {
+      void stopAndroidSpeechInput();
       return;
     }
     void stopNativeRecording();
@@ -554,7 +699,7 @@ function MagicLogInput({
         value={value}
         onChangeText={onChange}
         maxLength={1000}
-        placeholder="今天妈妈有什么让你担心的事吗？"
+        placeholder=""
         placeholderTextColor={colors.text.muted}
         style={[styles.textInput, parseState === "parsing" && styles.textInputDisabled]}
         textAlignVertical="top"
@@ -562,19 +707,6 @@ function MagicLogInput({
       <View style={styles.inputMetaRow}>
         <Text style={styles.inputError}>{error ?? ""}</Text>
         {value.length > 800 ? <Text style={styles.charCount}>{value.length} / 1000</Text> : null}
-      </View>
-      <View style={styles.quickRow}>
-        {quickChips.map((chip) => (
-          <Pressable
-            key={chip}
-            accessibilityRole="button"
-            hitSlop={hitSlop}
-            onPress={() => onChange(value ? `${value}，${chip}` : chip)}
-            style={styles.quickChip}
-          >
-            <Text style={styles.quickChipText}>{chip}</Text>
-          </Pressable>
-        ))}
       </View>
       <View style={styles.inputActions}>
         <Pressable
@@ -1093,27 +1225,6 @@ const styles = StyleSheet.create({
   charCount: {
     ...typography.small,
     color: colors.text.muted
-  },
-  quickRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 12
-  },
-  quickChip: {
-    minHeight: 40,
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,253,248,0.76)",
-    borderWidth: 1,
-    borderColor: colors.border.subtle
-  },
-  quickChipText: {
-    ...typography.small,
-    fontWeight: "800",
-    color: colors.text.secondary
   },
   inputActions: {
     flexDirection: "row",

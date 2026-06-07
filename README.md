@@ -163,6 +163,9 @@ Create `.env` from `.env.example` and adjust these values:
 | `MODEL_NAME` | yes | Provider model identifier |
 | `MODEL_BASE_URL` | optional | Override model endpoint |
 | `MODEL_API_KEY` | optional | Provider API key when not using `CF_AIG_TOKEN` |
+| `TRANSCRIPTION_API_KEY` | required for native voice-to-text | Speech transcription provider key; falls back to `OPENAI_API_KEY`, `MODEL_API_KEY`, or `CF_AIG_TOKEN` |
+| `TRANSCRIPTION_MODEL` | optional | Speech transcription model, default `gpt-4o-mini-transcribe` |
+| `TRANSCRIPTION_BASE_URL` | optional | OpenAI-compatible transcription endpoint, default `https://api.openai.com/v1` |
 | `PROMPT_MODE` | optional | `WEAK` or `STRONG` prompt mode |
 | `PORT` | optional | Default `python main.py` port |
 | `DRUGBANK_API_KEY` | optional | External MCP drug knowledge source |
@@ -173,6 +176,8 @@ Minimal example:
 CF_AIG_TOKEN=your-cloudflare-ai-gateway-token
 CF_AIG_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat
 MODEL_NAME=google-ai-studio/gemini-2.5-flash
+TRANSCRIPTION_API_KEY=your-openai-or-compatible-api-key
+TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
 PROMPT_MODE=WEAK
 PORT=8080
 ```

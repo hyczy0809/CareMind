@@ -16,6 +16,16 @@ import {
 } from "lucide-react-native";
 import { useCareMind } from "../../lib/caremind-store";
 import { transcribeAudioNote } from "../../lib/care-workflow-api";
+import { isPrivacyMode } from "../../lib/inference/privacy-mode";
+import {
+  ANDROID_SPEECH_RECOGNITION_AVAILABLE,
+  cancelAndroidSpeechRecognition,
+  isAndroidSpeechRecognitionAvailable,
+  startAndroidSpeechRecognition,
+  stopAndroidSpeechRecognition,
+  subscribeAndroidSpeechError,
+  subscribeAndroidSpeechResult
+} from "../../lib/speech/android-speech";
 import { colors, hitSlop, typography } from "../../lib/theme";
 import type { AnalyticsEvent } from "../../types/caremind";
 import { Button } from "../ui/Button";
@@ -146,6 +156,8 @@ function ConcernVoiceButton({
   const finalTranscriptRef = useRef("");
   const voiceHadErrorRef = useRef(false);
   const nativeStopRequestedRef = useRef(false);
+  const androidSpeechStopRequestedRef = useRef(false);
+  const voiceStateRef = useRef<VoiceState>("idle");
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
 
@@ -154,13 +166,61 @@ function ConcernVoiceButton({
   }, [value]);
 
   useEffect(() => {
+    voiceStateRef.current = voiceState;
+  }, [voiceState]);
+
+  useEffect(() => {
     return () => {
       recognitionRef.current?.abort();
       recognitionRef.current = null;
+      if (ANDROID_SPEECH_RECOGNITION_AVAILABLE) {
+        void cancelAndroidSpeechRecognition().catch(() => undefined);
+      }
       if (recordingRef.current) {
         void recordingRef.current.stopAndUnloadAsync().catch(() => undefined);
         recordingRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ANDROID_SPEECH_RECOGNITION_AVAILABLE) return;
+
+    const resultSub = subscribeAndroidSpeechResult((event) => {
+      const transcript = event.transcript?.trim() ?? "";
+      if (!transcript) return;
+
+      if (event.isFinal) {
+        androidSpeechStopRequestedRef.current = false;
+        appendTranscript(transcript);
+        setVoiceState("idle");
+        setVoiceHint("已转成文字，可以继续补充。");
+        onTrackVoiceEvent("voice_input_succeeded", {
+          platform: Platform.OS,
+          entry: "onboarding_concern",
+          provider: "android_speech_recognizer",
+          transcript_length: transcript.length
+        });
+      } else {
+        setVoiceHint(`正在听：${transcript}`);
+      }
+    });
+
+    const errorSub = subscribeAndroidSpeechError((event) => {
+      androidSpeechStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint(event.message ?? "这次没有成功转成文字，可以再试一次或手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        provider: "android_speech_recognizer",
+        reason: event.message ?? "android_speech_error"
+      });
+    });
+
+    return () => {
+      resultSub.remove();
+      errorSub.remove();
     };
   }, []);
 
@@ -346,6 +406,91 @@ function ConcernVoiceButton({
     }
   }
 
+  async function startAndroidSpeechInput() {
+    if (voiceStateRef.current === "transcribing") return;
+
+    androidSpeechStopRequestedRef.current = false;
+    setVoiceState("listening");
+    setVoiceHint("正在请求麦克风权限……");
+
+    try {
+      if (await isPrivacyMode()) {
+        setVoiceState("unsupported");
+        setVoiceHint("隐私模式下暂不启用语音转文字。你可以先手动输入，或关闭隐私模式后使用系统语音识别。");
+        onTrackVoiceEvent("voice_input_unsupported", {
+          platform: Platform.OS,
+          entry: "onboarding_concern",
+          reason: "privacy_mode_audio_disabled"
+        });
+        return;
+      }
+
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        setVoiceState("error");
+        setVoiceHint("没有麦克风权限，请在系统设置里允许 CareMind 使用麦克风。");
+        onTrackVoiceEvent("voice_input_failed", {
+          platform: Platform.OS,
+          entry: "onboarding_concern",
+          reason: "microphone_permission_denied"
+        });
+        return;
+      }
+
+      const available = await isAndroidSpeechRecognitionAvailable();
+      if (!available) {
+        unsupportedVoiceInput();
+        return;
+      }
+
+      await startAndroidSpeechRecognition("zh-CN");
+      setVoiceHint("正在听，松手后我会转成文字。");
+      onTrackVoiceEvent("voice_input_started", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        provider: "android_speech_recognizer"
+      });
+
+      if (androidSpeechStopRequestedRef.current) {
+        await stopAndroidSpeechInput();
+      }
+    } catch (error) {
+      androidSpeechStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint(error instanceof Error ? error.message : "语音识别没有启动成功，可以先手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        provider: "android_speech_recognizer",
+        reason: error instanceof Error ? error.message : "android_speech_start_failed"
+      });
+    }
+  }
+
+  async function stopAndroidSpeechInput() {
+    if (voiceStateRef.current !== "listening") {
+      androidSpeechStopRequestedRef.current = true;
+      return;
+    }
+
+    setVoiceState("transcribing");
+    setVoiceHint("正在转成文字……");
+
+    try {
+      await stopAndroidSpeechRecognition();
+    } catch (error) {
+      androidSpeechStopRequestedRef.current = false;
+      setVoiceState("error");
+      setVoiceHint(error instanceof Error ? error.message : "语音识别停止失败，可以先手动输入。");
+      onTrackVoiceEvent("voice_input_failed", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        provider: "android_speech_recognizer",
+        reason: error instanceof Error ? error.message : "android_speech_stop_failed"
+      });
+    }
+  }
+
   async function stopNativeRecording() {
     const recording = recordingRef.current;
     if (!recording) {
@@ -404,12 +549,20 @@ function ConcernVoiceButton({
       startWebSpeechInput();
       return;
     }
+    if (Platform.OS === "android") {
+      void startAndroidSpeechInput();
+      return;
+    }
     void startNativeRecording();
   }
 
   function stopVoiceInput() {
     if (Platform.OS === "web") {
       stopWebSpeechInput();
+      return;
+    }
+    if (Platform.OS === "android") {
+      void stopAndroidSpeechInput();
       return;
     }
     void stopNativeRecording();

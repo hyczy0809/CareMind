@@ -35,8 +35,18 @@ UPLOAD_ROOT = Path(os.environ.get("CAREMIND_UPLOAD_DIR", "uploads/medical_docume
 DOCUMENT_INDEX_PATH = UPLOAD_ROOT.parent / "document_index.json"
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
-TRANSCRIPTION_BASE_URL = os.environ.get("TRANSCRIPTION_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-TRANSCRIPTION_API_KEY = os.environ.get("TRANSCRIPTION_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("MODEL_API_KEY")
+TRANSCRIPTION_BASE_URL = (
+    os.environ.get("TRANSCRIPTION_BASE_URL")
+    or os.environ.get("OPENAI_BASE_URL")
+    or os.environ.get("CF_AIG_BASE_URL")
+    or "https://api.openai.com/v1"
+)
+TRANSCRIPTION_API_KEY = (
+    os.environ.get("TRANSCRIPTION_API_KEY")
+    or os.environ.get("OPENAI_API_KEY")
+    or os.environ.get("MODEL_API_KEY")
+    or os.environ.get("CF_AIG_TOKEN")
+)
 TRANSCRIPTION_MODEL = os.environ.get("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 SUPPORTED_DOCUMENT_TYPES = {
     "clinic_note",
@@ -552,7 +562,7 @@ async def transcribe_audio_note(
     if not TRANSCRIPTION_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail="Transcription API key is not configured. Set TRANSCRIPTION_API_KEY, OPENAI_API_KEY, or MODEL_API_KEY.",
+            detail="Transcription API key is not configured. Set TRANSCRIPTION_API_KEY, OPENAI_API_KEY, MODEL_API_KEY, or CF_AIG_TOKEN.",
         )
 
     audio_bytes = await read_upload_bytes_with_limit(file, MAX_AUDIO_BYTES)
@@ -662,6 +672,12 @@ GEMMA_MODEL_DIR = Path(
     )
 ).resolve()
 GEMMA_MODEL_EXTENSIONS = {".litertlm", ".task"}
+GEMMA_MODEL_DOWNLOAD_MODE = os.environ.get("CAREMIND_MODEL_DOWNLOAD_MODE", "redirect").lower()
+GEMMA_REMOTE_MODEL_IDS = {
+    item.strip()
+    for item in os.environ.get("CAREMIND_REMOTE_MODEL_IDS", "gemma-4-E2B-it.litertlm").split(",")
+    if item.strip()
+}
 
 # A small static lookup keyed by exact filename. Drives the human-readable
 # display name and capability flags shown to the user in the picker.
@@ -672,18 +688,24 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "description": "轻量文本模型（~560 MB）。适合中端机，速度快，不支持语音转写。",
         "supports_audio": False,
         "tier": "light",
+        "download_url": "https://hf-mirror.com/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
+        "size_bytes": 587_000_000,
     },
     "gemma-4-E2B-it.litertlm": {
         "display_name": "Gemma 4 E2B",
         "description": "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
         "supports_audio": True,
         "tier": "medium",
+        "download_url": "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
+        "size_bytes": 2_588_147_712,
     },
     "gemma-4-E4B-it.litertlm": {
         "display_name": "Gemma 4 E4B",
         "description": "完整多模态模型（~3.5 GB）。质量最高，建议 8 GB+ 内存旗舰设备。",
         "supports_audio": True,
         "tier": "full",
+        "download_url": "https://hf-mirror.com/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm?download=true",
+        "size_bytes": 3_760_000_000,
     },
 }
 
@@ -709,6 +731,7 @@ def _resolve_model_file(filename: str) -> Path:
 def _build_model_entry(path: Path) -> dict:
     stat = path.stat()
     registry = GEMMA_MODEL_REGISTRY.get(path.name, {})
+    download_url = registry.get("download_url") if GEMMA_MODEL_DOWNLOAD_MODE != "stream" else None
     return {
         "id": path.name,                       # stable ID = filename
         "filename": path.name,
@@ -718,8 +741,29 @@ def _build_model_entry(path: Path) -> dict:
         "tier": registry.get("tier", "unknown"),
         "size_bytes": stat.st_size,
         "format": path.suffix.lstrip("."),
-        "download_path": f"/api/models/{path.name}",
+        "download_path": download_url or f"/api/models/{path.name}",
         "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+def _build_registry_model_entry(filename: str) -> dict:
+    registry = GEMMA_MODEL_REGISTRY.get(filename)
+    if not registry or not registry.get("download_url"):
+        raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in GEMMA_MODEL_EXTENSIONS:
+        raise HTTPException(status_code=415, detail=f"不支持的模型格式：{suffix}")
+    return {
+        "id": filename,
+        "filename": filename,
+        "display_name": registry.get("display_name", Path(filename).stem),
+        "description": registry.get("description", ""),
+        "supports_audio": bool(registry.get("supports_audio", False)),
+        "tier": registry.get("tier", "unknown"),
+        "size_bytes": int(registry.get("size_bytes", 0)),
+        "format": suffix.lstrip("."),
+        "download_path": registry.get("download_url") or f"/api/models/{filename}",
+        "modified_at": "remote",
     }
 
 
@@ -729,12 +773,17 @@ async def list_models():
     backend. The mobile app uses this to render the model picker inside the
     privacy-mode card; if the backend has no models, the picker is empty
     and privacy mode silently stays off."""
-    if not GEMMA_MODEL_DIR.exists():
-        return {"models": [], "model_dir": str(GEMMA_MODEL_DIR)}
     entries: list[dict] = []
-    for path in sorted(GEMMA_MODEL_DIR.iterdir()):
-        if path.is_file() and path.suffix.lower() in GEMMA_MODEL_EXTENSIONS:
-            entries.append(_build_model_entry(path))
+    seen: set[str] = set()
+    if GEMMA_MODEL_DIR.exists():
+        for path in sorted(GEMMA_MODEL_DIR.iterdir()):
+            if path.is_file() and path.suffix.lower() in GEMMA_MODEL_EXTENSIONS:
+                entries.append(_build_model_entry(path))
+                seen.add(path.name)
+    if GEMMA_MODEL_DOWNLOAD_MODE != "stream":
+        for filename in sorted(GEMMA_REMOTE_MODEL_IDS):
+            if filename not in seen:
+                entries.append(_build_registry_model_entry(filename))
     return {"models": entries, "model_dir": str(GEMMA_MODEL_DIR)}
 
 
@@ -742,14 +791,31 @@ async def list_models():
 async def model_meta(filename: str):
     """Quick metadata probe so the app can show a friendly size hint before
     starting a multi-GB download."""
-    return _build_model_entry(_resolve_model_file(filename))
+    try:
+        return _build_model_entry(_resolve_model_file(filename))
+    except HTTPException:
+        if GEMMA_MODEL_DOWNLOAD_MODE != "stream":
+            return _build_registry_model_entry(filename)
+        raise
 
 
 @app.get("/api/models/{filename}")
 async def model_download(filename: str):
-    """Stream a specific on-device weight file. The mobile app picks one
-    from /api/models and downloads it here. No auth — same trust boundary
-    as the rest of /api/*."""
+    """Serve a specific on-device weight file.
+
+    For demo sharing, the default mode redirects to the model CDN. This keeps
+    the APK-compatible `/api/models/<filename>` URL stable without pushing a
+    multi-GB file through a fragile local tunnel. Set
+    `CAREMIND_MODEL_DOWNLOAD_MODE=stream` to proxy the local file directly.
+    """
+    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+    download_url = registry.get("download_url")
+
+    if GEMMA_MODEL_DOWNLOAD_MODE != "stream" and download_url:
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse(str(download_url), status_code=302)
+
     path = _resolve_model_file(filename)
     size_bytes = path.stat().st_size
 

@@ -13,6 +13,7 @@ import { Gemma, GEMMA_NATIVE_AVAILABLE, subscribeDownloadProgress } from "./gemm
 import {
   fetchModelCatalog,
   findModelById,
+  resolveModelDownloadUrl,
   type ModelCatalogEntry
 } from "./model-catalog";
 import {
@@ -163,7 +164,9 @@ export async function downloadModel(filename: string): Promise<void> {
   });
 
   try {
-    await Gemma.downloadModel(filename, buildModelDownloadUrl(filename));
+    const entry = await findModelById(filename);
+    const url = entry ? resolveModelDownloadUrl(entry) : buildModelDownloadUrl(filename);
+    await Gemma.downloadModel(filename, url);
     patchEntry(filename, { status: "ready", progress: 1 });
   } catch (error) {
     patchEntry(filename, {

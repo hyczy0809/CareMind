@@ -4,6 +4,7 @@
 // to know the filename / size of the currently selected model.
 
 import { buildModelCatalogUrl } from "./constants";
+import { buildApiUrl } from "../shared/http";
 
 export interface ModelCatalogEntry {
   /** Stable identifier == the filename. */
@@ -33,6 +34,24 @@ export interface ModelCatalog {
 let cache: ModelCatalog | null = null;
 let cacheTime = 0;
 const CACHE_TTL_MS = 60_000;
+const FALLBACK_CATALOG: ModelCatalog = {
+  model_dir: "builtin",
+  models: [
+    {
+      id: "gemma-4-E2B-it.litertlm",
+      filename: "gemma-4-E2B-it.litertlm",
+      display_name: "Gemma 4 E2B",
+      description: "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
+      supports_audio: true,
+      tier: "medium",
+      size_bytes: 2588147712,
+      format: "litertlm",
+      download_path:
+        "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
+      modified_at: "fallback"
+    }
+  ]
+};
 
 /** Fetch the model catalog from the backend. Cached for ~60 s. */
 export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
@@ -49,15 +68,19 @@ export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
       throw new Error(`catalog HTTP ${response.status}`);
     }
     const payload = (await response.json()) as ModelCatalog;
+    const models = Array.isArray(payload.models) ? payload.models : [];
     cache = {
-      models: Array.isArray(payload.models) ? payload.models : [],
+      models: models.length > 0 ? models : FALLBACK_CATALOG.models,
       model_dir: payload.model_dir ?? ""
     };
     cacheTime = Date.now();
     return cache;
   } catch (error) {
     if (cache) return cache; // Stale-but-usable on network errors.
-    throw error;
+    console.warn("[model-catalog] using fallback catalog", error);
+    cache = FALLBACK_CATALOG;
+    cacheTime = Date.now();
+    return cache;
   } finally {
     clearTimeout(timeout);
   }
@@ -77,4 +100,12 @@ export async function findModelById(modelId: string): Promise<ModelCatalogEntry 
 export function clearCatalogCache(): void {
   cache = null;
   cacheTime = 0;
+}
+
+export function resolveModelDownloadUrl(entry: ModelCatalogEntry): string {
+  if (/^https?:\/\//i.test(entry.download_path)) {
+    return entry.download_path;
+  }
+  const path = entry.download_path.startsWith("/") ? entry.download_path : `/${entry.download_path}`;
+  return buildApiUrl(path);
 }

@@ -17,6 +17,7 @@ import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
 import com.caremind.app.gemma.CaremindGemmaPackage
+import com.caremind.app.speech.CaremindSpeechPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -27,6 +28,7 @@ class MainApplication : Application(), ReactApplication {
             val packages = PackageList(this).packages
             // CareMind on-device LLM bridge (Gemma 3 via MediaPipe LLM Inference API).
             packages.add(CaremindGemmaPackage())
+            packages.add(CaremindSpeechPackage())
             return packages
           }
 
