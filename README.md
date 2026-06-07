@@ -64,6 +64,7 @@ Screen map:
 - [Tech Stack](#tech-stack)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
+- [Android APK Backend Binding](#android-apk-backend-binding)
 - [Gemma4 Relationship](#gemma4-relationship)
 - [API Examples](#api-examples)
 - [Architecture](#architecture)
@@ -175,6 +176,25 @@ MODEL_NAME=google-ai-studio/gemini-2.5-flash
 PROMPT_MODE=WEAK
 PORT=8080
 ```
+
+## Android APK Backend Binding
+
+For USB debugging, the Android app can still use the laptop backend through `adb reverse`:
+
+```bash
+adb reverse tcp:8090 tcp:8090
+cd frontend
+npm run android:usb
+```
+
+For a normal installed APK, do not bind the app to `127.0.0.1`. Build the APK with the deployed HTTPS backend:
+
+```bash
+cd frontend
+EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
+```
+
+If a release APK is built without `EXPO_PUBLIC_CAREMIND_API_URL`, CareMind fails closed with a clear configuration error instead of calling the phone's localhost.
 
 ## Gemma4 Relationship
 

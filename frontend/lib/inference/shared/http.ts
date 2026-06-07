@@ -1,12 +1,38 @@
 // Shared HTTP/config plumbing for the cloud inference adapters. Kept here so
 // each per-task cloud file stays focussed on its own mapping logic.
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:8090";
+const DEV_API_BASE_URL =
+  process.env.EXPO_PUBLIC_CAREMIND_DEV_API_URL ?? "http://127.0.0.1:8090";
+const CONFIGURED_API_BASE_URL = process.env.EXPO_PUBLIC_CAREMIND_API_URL?.trim();
+const IS_DEV_BUILD =
+  typeof __DEV__ !== "undefined" ? __DEV__ : process.env.NODE_ENV !== "production";
 
-export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_CAREMIND_API_URL ?? DEFAULT_API_BASE_URL;
+export const API_BASE_URL = normalizeApiBaseUrl(
+  CONFIGURED_API_BASE_URL || (IS_DEV_BUILD ? DEV_API_BASE_URL : "")
+);
+
+export const API_BASE_SOURCE = CONFIGURED_API_BASE_URL
+  ? "env"
+  : IS_DEV_BUILD
+    ? "dev-default"
+    : "missing-production-env";
 
 export const REQUEST_TIMEOUT_MS = 12000;
+
+export function requireApiBaseUrl(): string {
+  if (!API_BASE_URL) {
+    throw new Error(
+      "CareMind 后端地址未配置。发布 APK 前请设置 EXPO_PUBLIC_CAREMIND_API_URL 为已部署的 HTTPS 后端地址。"
+    );
+  }
+  return API_BASE_URL;
+}
+
+export function buildApiUrl(path: string): string {
+  const base = requireApiBaseUrl();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalizedPath}`;
+}
 
 export async function readableApiError(response: Response, fallback: string): Promise<string> {
   try {
@@ -22,7 +48,7 @@ export async function postJson<TResponse>(path: string, payload: unknown): Promi
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    const response = await fetch(buildApiUrl(path), {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -44,4 +70,8 @@ export async function postJson<TResponse>(path: string, payload: unknown): Promi
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function normalizeApiBaseUrl(value: string | undefined): string {
+  return (value ?? "").replace(/\/+$/, "");
 }

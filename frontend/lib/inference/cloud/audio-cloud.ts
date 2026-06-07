@@ -1,4 +1,4 @@
-import { API_BASE_URL, readableApiError } from "../shared/http";
+import { buildApiUrl, readableApiError } from "../shared/http";
 import type { AudioTranscriptionResponse, TranscribeAudioNoteInput } from "../shared/types";
 
 export async function transcribeAudioNoteCloud(
@@ -13,7 +13,7 @@ export async function transcribeAudioNoteCloud(
     type: input.asset.mimeType ?? "audio/m4a"
   } as unknown as Blob);
 
-  const response = await fetch(`${API_BASE_URL}/api/audio/transcribe`, {
+  const response = await fetch(buildApiUrl("/api/audio/transcribe"), {
     method: "POST",
     body: formData
   });

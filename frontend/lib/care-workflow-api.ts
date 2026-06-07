@@ -8,7 +8,7 @@
 // (file storage and parsing happen server-side; nothing the on-device model
 // can replace).
 
-import { API_BASE_URL, readableApiError } from "./inference/shared/http";
+import { buildApiUrl, readableApiError } from "./inference/shared/http";
 
 export {
   runCareWorkflow,
@@ -114,7 +114,7 @@ export async function uploadMedicalDocument(
     type: input.asset.mimeType ?? "application/octet-stream"
   } as unknown as Blob);
 
-  const response = await fetch(`${API_BASE_URL}/api/documents/upload`, {
+  const response = await fetch(buildApiUrl("/api/documents/upload"), {
     method: "POST",
     body: formData
   });
@@ -127,7 +127,7 @@ export async function uploadMedicalDocument(
 }
 
 export async function getMedicalDocument(documentId: string): Promise<MedicalDocumentRecord> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}`);
+  const response = await fetch(buildApiUrl(`/api/documents/${documentId}`));
   if (!response.ok) {
     throw new Error(await readableApiError(response, "资料状态查询失败"));
   }
@@ -135,7 +135,7 @@ export async function getMedicalDocument(documentId: string): Promise<MedicalDoc
 }
 
 export async function parseMedicalDocument(documentId: string): Promise<DocumentParseResult> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/parse`, {
+  const response = await fetch(buildApiUrl(`/api/documents/${documentId}/parse`), {
     method: "POST"
   });
   if (!response.ok) {
@@ -147,7 +147,7 @@ export async function parseMedicalDocument(documentId: string): Promise<Document
 export async function confirmMedicalDocumentReview(
   input: ConfirmDocumentReviewInput
 ): Promise<ConfirmDocumentReviewResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${input.documentId}/review`, {
+  const response = await fetch(buildApiUrl(`/api/documents/${input.documentId}/review`), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -166,7 +166,7 @@ export async function confirmMedicalDocumentReview(
 }
 
 export async function deleteMedicalDocument(documentId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+  const response = await fetch(buildApiUrl(`/api/documents/${documentId}`), {
     method: "DELETE"
   });
   if (!response.ok) {

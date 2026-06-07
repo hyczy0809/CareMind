@@ -7,6 +7,8 @@
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
+    "android:usb": "EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 expo run:android",
+    "android:release": "expo run:android --variant release",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit"
   },

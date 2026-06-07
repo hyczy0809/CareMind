@@ -3,7 +3,7 @@
 // PrivacyModeCard renders as a picker, and what model-manager looks up
 // to know the filename / size of the currently selected model.
 
-import { MODEL_CATALOG_URL } from "./constants";
+import { buildModelCatalogUrl } from "./constants";
 
 export interface ModelCatalogEntry {
   /** Stable identifier == the filename. */
@@ -44,7 +44,7 @@ export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
   const timeout = setTimeout(() => controller.abort(), 8_000);
 
   try {
-    const response = await fetch(MODEL_CATALOG_URL, { signal: controller.signal });
+    const response = await fetch(buildModelCatalogUrl(), { signal: controller.signal });
     if (!response.ok) {
       throw new Error(`catalog HTTP ${response.status}`);
     }

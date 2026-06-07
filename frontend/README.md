@@ -51,11 +51,30 @@ npm run web
 npm run typecheck
 ```
 
-如需修改后端地址，可设置：
+### 后端地址配置
+
+Web 和 USB 真机调试可以继续使用本机后端：
 
 ```bash
 EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run web
 ```
+
+如果是 Android 真机通过数据线调试，需要先把手机的 `127.0.0.1:8090` 转发到电脑：
+
+```bash
+adb reverse tcp:8090 tcp:8090
+npm run android:usb
+```
+
+正式 APK 不应该绑定 `127.0.0.1`。发布前需要把已部署的 HTTPS 后端写入构建环境：
+
+```bash
+cp .env.production.example .env.production
+# 把 https://your-caremind-api.example.com 改成真实部署地址
+EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
+```
+
+如果 release 构建没有配置 `EXPO_PUBLIC_CAREMIND_API_URL`，App 会明确提示“后端地址未配置”，不会误请求手机自己的 localhost。
 
 ## 主要文件
 

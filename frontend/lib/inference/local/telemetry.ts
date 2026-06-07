@@ -9,10 +9,8 @@
 // Only counts (chars), durations (ms), task name and model id leave the device.
 // The endpoint on the backend additionally rejects oversized strings.
 
-const API_BASE =
-  process.env.EXPO_PUBLIC_CAREMIND_API_URL ?? "http://127.0.0.1:8090";
+import { buildApiUrl } from "../shared/http";
 
-const TELEMETRY_URL = `${API_BASE}/api/telemetry/ondevice`;
 const TELEMETRY_TIMEOUT_MS = 4_000;
 
 export type OnDeviceTask = "care_workflow" | "guardrail" | "followup" | "audio";
@@ -49,7 +47,7 @@ export async function reportOnDeviceInference(t: OnDeviceTelemetry): Promise<voi
   };
 
   try {
-    const response = await fetch(TELEMETRY_URL, {
+    const response = await fetch(buildApiUrl("/api/telemetry/ondevice"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
