@@ -8,7 +8,7 @@
 ![Safety](https://img.shields.io/badge/safety-non--diagnostic-476F92)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## TL;DR for Judges
+## 评委速览
 
 CareMind 是一个面向失智症家庭照护者的 Android Edge AI Care Agent。它把家属零散的照护记录整理成结构化日志、今日行动、沟通话术、照护者支持和复诊摘要，并通过端侧 Gemma LiteRT 模型让敏感记录优先留在本机处理。
 
@@ -16,7 +16,7 @@ CareMind 是一个面向失智症家庭照护者的 Android Edge AI Care Agent�
 
 **安全边界：**CareMind 不是医疗器械，不诊断、不处方、不判断检查、不替代医生或急救服务。它只帮助家庭整理照护观察，并准备复诊沟通材料。
 
-## Demo / 评委快速验证
+## 演示与评委快速验证
 
 **最短路径：先看视频**
 
@@ -51,22 +51,22 @@ curl -X POST https://caremind-1039168666325.us-west1.run.app/api/care-workflow \
 
 预期可以看到结构化照护字段、今日关注事项、照护沟通建议和非诊断性下一步提示。
 
-**完整路径：Android Edge AI 演示**
+**完整路径：Android 端侧 AI 演示**
 
 ```text
-Android App -> Settings / Privacy Mode -> 刷新模型目录 -> 下载 Gemma LiteRT 模型
+Android App -> 设置 / 隐私模式 -> 刷新模型目录 -> 下载 Gemma LiteRT 模型
 -> 关闭网络 -> 输入敏感照护记录 -> 本机生成非诊断性照护理解与建议
 ```
 
-## Why CareMind
+## 为什么做 CareMind
 
 失智症家庭照护的难点不是只发生在诊室里。家属每天要记住夜间起床、拒药、少食、怀疑东西被偷、反复要回家、情绪激动和自己的疲惫。复诊时，医生需要的是清楚的近期变化，但家属常常只能依靠记忆和碎片聊天记录。
 
 CareMind 的目标不是替医生判断病情，而是帮助家属把这些混乱日常变成可记录、可追踪、可沟通的照护线索。
 
-## What CareMind Does
+## CareMind 做什么
 
-| Care burden | CareMind output |
+| 照护负担 | CareMind 输出 |
 |---|---|
 | 说不清今天发生了什么 | 结构化照护日志 |
 | 不知道今晚先做什么 | 今日关注事项 + 低负担行动 |
@@ -78,13 +78,13 @@ CareMind 的目标不是替医生判断病情，而是帮助家属把这些混�
 产品闭环：
 
 ```text
-messy caregiver note
--> structured care log
--> daily action
--> communication script
--> caregiver support
--> follow-up summary
--> privacy-aware edge processing
+零散照护记录
+-> 结构化照护日志
+-> 今日行动
+-> 沟通话术
+-> 照护者支持
+-> 复诊摘要
+-> 隐私优先的端侧处理
 ```
 
 核心页面：
@@ -93,7 +93,7 @@ messy caregiver note
 - **智能记录**：输入或语音记录照护事件，生成结构化日志、家庭观察信号和沟通话术。
 - **复诊准备**：聚合近 7 天 / 30 天记录、病历/检查/用药资料，生成可复制复诊摘要。
 
-## Why Edge AI
+## 为什么是 Edge AI
 
 CareMind 选择 C 赛道不是因为“端侧更酷”，而是因为产品场景本身需要隐私优先。
 
@@ -111,29 +111,29 @@ Edge AI 证据：
 
 | 场景 | 模型 / 路径 | 状态 | 作用 |
 |---|---|---|---|
-| Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | Demo-ready | 敏感照护记录本地理解与建议生成 |
-| Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | Supported path / experimental | 通过动态模型目录支持，真机稳定性取决于设备内存 |
-| 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | Done | 完整工作流、摘要、工具调用 |
-| 稳定性兜底 | deterministic parser / fallback builders | Done | 保证 Demo 不因小模型输出不完整而中断 |
+| Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | 可演示 | 敏感照护记录本地理解与建议生成 |
+| Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | 已支持路径 / 实验性 | 通过动态模型目录支持，真机稳定性取决于设备内存 |
+| 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 完整工作流、摘要、工具调用 |
+| 稳定性兜底 | deterministic parser / fallback builders | 已完成 | 保证 Demo 不因小模型输出不完整而中断 |
 
 不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。
 
-## Architecture
+## 架构设计
 
 ```mermaid
 flowchart TD
     A["Expo / React Native App"] --> B["Inference Router"]
-    B --> C["Android Edge Privacy Mode"]
-    C --> D["Gemma LiteRT Native Module"]
-    D --> E["Local Structured Output Parser"]
-    B --> F["Cloud Agent Mode"]
-    F --> G["FastAPI Business APIs"]
-    G --> H["Care Workflow Service"]
-    H --> I["Memory Store"]
-    H --> J["OpenAI-compatible Model Adapter"]
-    J --> K["Cloud Model / Gemma-family Endpoint"]
-    G --> L["/api/models Dynamic Catalog"]
-    L --> M["Google Cloud Storage Model Files"]
+    B --> C["Android 端侧隐私模式"]
+    C --> D["Gemma LiteRT 原生模块"]
+    D --> E["本地结构化解析"]
+    B --> F["云端 Agent 模式"]
+    F --> G["FastAPI 业务 API"]
+    G --> H["照护工作流服务"]
+    H --> I["Memory 存储"]
+    H --> J["OpenAI-compatible 模型适配器"]
+    J --> K["云端模型 / Gemma-family Endpoint"]
+    G --> L["/api/models 动态模型目录"]
+    L --> M["Google Cloud Storage 模型文件"]
 ```
 
 核心接口：
@@ -147,32 +147,32 @@ GET  /api/models/{filename}
 POST /v1/chat/completions
 ```
 
-## Capability Status
+## 当前完成度
 
-| Capability | Status |
+| 能力 | 状态 |
 |---|---|
-| Cloud Run backend | Done |
-| `/api/care-workflow` | Done |
-| `/api/reports/follow-up` | Done |
-| `/api/models` dynamic catalog | Done |
-| Android native Gemma bridge | Demo-ready |
-| Gemma 3 1B LiteRT Android privacy mode | Demo-ready |
-| Gemma 4 E2B/E4B Android model path | Supported path / experimental |
-| Fully offline Android inference | Demo-ready / experimental |
-| Cloud Agent Tool Calling | Done |
-| Doctor collaboration portal | Future |
-| Clinical validation | Not in scope |
+| Cloud Run 后端 | 已完成 |
+| `/api/care-workflow` | 已完成 |
+| `/api/reports/follow-up` | 已完成 |
+| `/api/models` 动态模型目录 | 已完成 |
+| Android 原生 Gemma bridge | 可演示 |
+| Gemma 3 1B LiteRT Android 隐私模式 | 可演示 |
+| Gemma 4 E2B/E4B Android 模型路径 | 已支持路径 / 实验性 |
+| 完全离线 Android 推理 | 可演示 / 实验性 |
+| 云端 Agent Tool Calling | 已完成 |
+| 医生协作端 | 未来计划 |
+| 临床验证 | 不在本次范围 |
 
-## Run Instructions
+## 运行方式
 
-### Recommended for judges
+### 推荐评委验证路径
 
-1. Watch the demo video.
-2. Test the deployed backend with the sample request above.
-3. Review the Android Edge AI code paths.
-4. Read the technical highlights and safety boundary.
+1. 先看演示视频。
+2. 用上面的示例请求测试已部署后端。
+3. 查看 Android Edge AI 相关代码路径。
+4. 阅读技术亮点和安全边界。
 
-### Local Web frontend
+### 本地 Web 前端
 
 ```bash
 git clone https://github.com/hyczy0809/CareMind.git
@@ -181,13 +181,13 @@ npm install
 EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app npm run web -- --port 8082
 ```
 
-Open:
+打开：
 
 ```text
 http://127.0.0.1:8082
 ```
 
-### Local backend + frontend
+### 本地后端 + 前端
 
 ```bash
 git clone https://github.com/hyczy0809/CareMind.git
@@ -197,7 +197,7 @@ cp .env.example .env
 uvicorn main:app --host 127.0.0.1 --port 8090
 ```
 
-Then:
+另开终端：
 
 ```bash
 cd frontend
@@ -205,7 +205,7 @@ npm install
 EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run web -- --port 8082
 ```
 
-### Android Edge AI demo
+### Android 端侧 AI 演示
 
 ```bash
 cd frontend/android
@@ -214,7 +214,7 @@ EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app \
 ./gradlew :app:assembleRelease
 ```
 
-USB debugging path:
+USB 调试方式：
 
 ```bash
 adb reverse tcp:8090 tcp:8090
@@ -222,7 +222,7 @@ cd frontend
 npm run android:usb
 ```
 
-### Docker backend
+### Docker 后端
 
 ```bash
 docker build -t caremind-backend .
@@ -230,7 +230,7 @@ docker run --rm -p 8080:8080 --env-file .env caremind-backend
 curl http://127.0.0.1:8080/health
 ```
 
-### Environment
+### 环境变量
 
 ```env
 CF_AIG_TOKEN=your-cloudflare-ai-gateway-token
@@ -246,24 +246,24 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 
 真实 API Key 只应写入本地 `.env`，不要提交到公开仓库。
 
-## Technical Highlights
+## 技术亮点
 
-1. **Android Edge AI privacy mode**
-   Code: [frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma)
+1. **Android 端侧隐私模式**
+   代码：[frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma)
 
-2. **Local / cloud inference router**
-   Code: [frontend/lib/inference/inference-router.ts](frontend/lib/inference/inference-router.ts)
+2. **本地 / 云端推理路由**
+   代码：[frontend/lib/inference/inference-router.ts](frontend/lib/inference/inference-router.ts)
 
-3. **Dynamic model catalog**
-   Code: [frontend/lib/inference/local/model-catalog.ts](frontend/lib/inference/local/model-catalog.ts), [main.py](main.py)
+3. **动态模型目录**
+   代码：[frontend/lib/inference/local/model-catalog.ts](frontend/lib/inference/local/model-catalog.ts), [main.py](main.py)
 
-4. **Cloud Agent Tool Calling**
-   Code: [my_agent/cloud_agents.py](my_agent/cloud_agents.py), [my_agent/cloudflare_openai_model.py](my_agent/cloudflare_openai_model.py)
+4. **云端 Agent Tool Calling**
+   代码：[my_agent/cloud_agents.py](my_agent/cloud_agents.py), [my_agent/cloudflare_openai_model.py](my_agent/cloudflare_openai_model.py)
 
-5. **Structured product data instead of chat-only output**
-   Code: [frontend/lib/inference/local/xml-parsers.ts](frontend/lib/inference/local/xml-parsers.ts), [my_agent/care_workflow_service.py](my_agent/care_workflow_service.py)
+5. **结构化产品数据，而不是纯聊天输出**
+   代码：[frontend/lib/inference/local/xml-parsers.ts](frontend/lib/inference/local/xml-parsers.ts), [my_agent/care_workflow_service.py](my_agent/care_workflow_service.py)
 
-## Safety & Privacy
+## 安全与隐私边界
 
 - CareMind 不是医疗器械。
 - 不诊断失智症进展。
@@ -275,35 +275,35 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 - 仓库只包含脱敏演示数据，不包含真实患者、家庭、医院、账号或生产系统数据。
 - 大模型文件应通过 Google Cloud Storage 或 Git LFS 管理，不应作为普通 Git blob 提交。
 
-## Deliverables
+## 交付物
 
-| Deliverable | Link |
+| 交付物 | 位置 |
 |---|---|
-| Project repo | <https://github.com/hyczy0809/CareMind> |
-| Competition PR | <https://github.com/gdgshanghai/Gemma4-Hackathon-ShangHai/pull/57> |
-| Demo video | <https://www.bilibili.com/video/BV1hFEg6ZEVb> |
-| Cloud Run backend | <https://caremind-1039168666325.us-west1.run.app> |
+| 项目仓库 | <https://github.com/hyczy0809/CareMind> |
+| 比赛 PR | <https://github.com/gdgshanghai/Gemma4-Hackathon-ShangHai/pull/57> |
+| 演示视频 | <https://www.bilibili.com/video/BV1hFEg6ZEVb> |
+| Cloud Run 后端 | <https://caremind-1039168666325.us-west1.run.app> |
 | PRD | [docs/PRD.md](docs/PRD.md) |
-| Frontend guide | [frontend/README.md](frontend/README.md) |
-| Demo storyboard | [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md) |
-| Recording guide | [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md) |
-| Backend entry | [main.py](main.py) |
-| OpenAI-compatible Agent route | [openai_compat.py](openai_compat.py) |
-| Agent / Memory workflow | [my_agent](my_agent) |
+| 前端说明 | [frontend/README.md](frontend/README.md) |
+| Demo 分镜 | [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md) |
+| 录制指南 | [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md) |
+| 后端入口 | [main.py](main.py) |
+| OpenAI-compatible Agent 路由 | [openai_compat.py](openai_compat.py) |
+| Agent / Memory 工作流 | [my_agent](my_agent) |
 | Android Gemma bridge | [frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma) |
-| Local / cloud inference router | [frontend/lib/inference](frontend/lib/inference) |
+| 本地 / 云端推理路由 | [frontend/lib/inference](frontend/lib/inference) |
 
-## Repository Structure
+## 目录结构
 
 ```text
 CareMind/
-├── frontend/                       # Expo / React Native frontend
+├── frontend/                       # Expo / React Native 前端
 │   ├── app/                        # Expo Router tabs
 │   ├── components/                 # Today, Smart Log, Follow-up, settings UI
 │   ├── lib/
-│   │   ├── inference/              # Cloud / local inference router
-│   │   └── speech/                 # Android system speech bridge
-│   └── android/                    # Android native project and Gemma bridge
+│   │   ├── inference/              # 云端 / 本地推理路由
+│   │   └── speech/                 # Android 系统语音桥接
+│   └── android/                    # Android 原生工程和 Gemma bridge
 ├── docs/
 │   ├── PRD.md
 │   └── demo-video/
@@ -311,17 +311,17 @@ CareMind/
 │   ├── care_workflow_service.py
 │   ├── memory_*.py
 │   └── memory_store/
-├── main.py                         # FastAPI app
+├── main.py                         # FastAPI 应用
 ├── openai_compat.py                # OpenAI-compatible Agent endpoint
 ├── requirements.txt
 ├── Dockerfile
 └── README.md
 ```
 
-## License
+## 许可证
 
-This project is released under the [MIT License](LICENSE).
+本项目采用 [MIT License](LICENSE)。
 
-## Acknowledgments
+## 致谢
 
 CareMind 的安全边界参考了公开失智症照护指南和照护者支持资料，包括 NICE dementia recommendations、Mayo Clinic diagnosis education 和 Alzheimer's Association caregiver stress materials。这些资料用于帮助产品保持边界清晰，不意味着 CareMind 是医疗器械或临床决策系统。
