@@ -1,5 +1,6 @@
 package com.caremind.app.gemma
 
+import android.app.ActivityManager
 import android.content.Context
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
@@ -18,6 +19,10 @@ import java.util.concurrent.atomic.AtomicReference
  * underlying MediaPipe Session is not safe to drive concurrently.
  */
 object GemmaEngineHolder {
+
+    private const val MAX_ENGINE_TOKENS = 768
+    private const val MAX_LOADABLE_MODEL_BYTES = 1_500_000_000L
+    private const val MIN_AVAILABLE_MEMORY_BYTES = 700_000_000L
 
     private val lock = Any()
     private val engineRef = AtomicReference<LlmInference?>(null)
@@ -58,17 +63,44 @@ object GemmaEngineHolder {
             if (!file.exists() || file.length() <= 0) {
                 throw IllegalStateException("模型文件不存在或为空：$modelPath")
             }
+            assertCanLoadModel(context.applicationContext, file)
 
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelPath)
-                .setMaxTokens(2048)
+                .setMaxTokens(MAX_ENGINE_TOKENS)
                 .setMaxTopK(64)
                 .build()
 
-            val engine = LlmInference.createFromOptions(context.applicationContext, options)
+            val engine = try {
+                LlmInference.createFromOptions(context.applicationContext, options)
+            } catch (error: OutOfMemoryError) {
+                engineRef.set(null)
+                loadedPathRef.set(null)
+                throw IllegalStateException("端侧模型加载内存不足。请关闭其他应用后重试，或在隐私模式里切换到 Gemma 3 1B。", error)
+            } catch (error: Throwable) {
+                engineRef.set(null)
+                loadedPathRef.set(null)
+                val reason = error.message ?: error.javaClass.simpleName
+                throw IllegalStateException("端侧模型加载失败：$reason", error)
+            }
             engineRef.set(engine)
             loadedPathRef.set(modelPath)
             return engine
+        }
+    }
+
+    private fun assertCanLoadModel(context: Context, file: File) {
+        if (file.length() > MAX_LOADABLE_MODEL_BYTES) {
+            throw IllegalStateException(
+                "当前端侧演示默认使用 Gemma 3 1B。${file.name} 体积较大，容易导致手机内存不足或闪退，请在隐私模式里切换到 Gemma 3 1B。"
+            )
+        }
+
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        if (memoryInfo.lowMemory || memoryInfo.availMem < MIN_AVAILABLE_MEMORY_BYTES) {
+            throw IllegalStateException("当前手机可用内存不足，暂时无法加载本地模型。请关闭其他应用后重试，或保持使用云端模式。")
         }
     }
 

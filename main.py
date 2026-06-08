@@ -9,7 +9,7 @@ from typing import Literal
 import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from my_agent.care_workflow_schema import (
@@ -675,10 +675,20 @@ GEMMA_MODEL_DIR = Path(
     )
 ).resolve()
 GEMMA_MODEL_EXTENSIONS = {".litertlm", ".task"}
-GEMMA_MODEL_DOWNLOAD_MODE = os.environ.get("CAREMIND_MODEL_DOWNLOAD_MODE", "redirect").lower()
+GEMMA_MODEL_DOWNLOAD_MODE = os.environ.get("CAREMIND_MODEL_DOWNLOAD_MODE", "proxy").lower()
+GEMMA_MODEL_REMOTE_TOKEN = (
+    os.environ.get("CAREMIND_HF_TOKEN")
+    or os.environ.get("HUGGINGFACE_TOKEN")
+    or os.environ.get("HF_TOKEN")
+)
+GEMMA_GCS_MODEL_BUCKET = os.environ.get("CAREMIND_GCS_MODEL_BUCKET", "").strip()
+GEMMA_GCS_MODEL_PREFIX = os.environ.get("CAREMIND_GCS_MODEL_PREFIX", "models").strip("/")
+GEMMA_GCS_MODEL_DELIVERY = os.environ.get("CAREMIND_GCS_MODEL_DELIVERY", "redirect").lower()
+GEMMA_GCS_DYNAMIC_CATALOG = os.environ.get("CAREMIND_GCS_DYNAMIC_CATALOG", "1").lower() not in {"0", "false", "no"}
+GEMMA_RECOMMENDED_MODEL_ID = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
 GEMMA_REMOTE_MODEL_IDS = {
     item.strip()
-    for item in os.environ.get("CAREMIND_REMOTE_MODEL_IDS", "gemma-4-E2B-it.litertlm").split(",")
+    for item in os.environ.get("CAREMIND_REMOTE_MODEL_IDS", GEMMA_RECOMMENDED_MODEL_ID).split(",")
     if item.strip()
 }
 
@@ -688,29 +698,69 @@ GEMMA_REMOTE_MODEL_IDS = {
 GEMMA_MODEL_REGISTRY: dict[str, dict] = {
     "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm": {
         "display_name": "Gemma 3 1B",
-        "description": "轻量文本模型（~560 MB）。适合中端机，速度快，不支持语音转写。",
+        "description": "推荐端侧演示模型（~560 MB）。适合中端机，速度快；语音当前先由系统转成可编辑文本。",
         "supports_audio": False,
         "tier": "light",
-        "download_url": "https://hf-mirror.com/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
+        "download_url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
         "size_bytes": 587_000_000,
     },
     "gemma-4-E2B-it.litertlm": {
         "display_name": "Gemma 4 E2B",
-        "description": "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
-        "supports_audio": True,
+        "description": "中等端侧文本模型（~2.5 GB）。用于本地照护理解与建议生成；语音当前先由系统转成可编辑文本。",
+        "supports_audio": False,
         "tier": "medium",
-        "download_url": "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
+        "download_url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
         "size_bytes": 2_588_147_712,
     },
     "gemma-4-E4B-it.litertlm": {
         "display_name": "Gemma 4 E4B",
-        "description": "完整多模态模型（~3.5 GB）。质量最高，建议 8 GB+ 内存旗舰设备。",
-        "supports_audio": True,
+        "description": "完整端侧模型（~3.5 GB）。质量更高但更吃内存，建议 8 GB+ 内存旗舰设备。",
+        "supports_audio": False,
         "tier": "full",
-        "download_url": "https://hf-mirror.com/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm?download=true",
+        "download_url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm?download=true",
         "size_bytes": 3_760_000_000,
     },
 }
+
+
+def _format_model_size(size_bytes: int) -> str:
+    if size_bytes <= 0:
+        return "未知大小"
+    mb = size_bytes / 1024 / 1024
+    if mb < 1024:
+        return f"{mb:.1f} MB"
+    return f"{mb / 1024:.2f} GB"
+
+
+def _infer_model_display_name(filename: str) -> str:
+    lower = filename.lower()
+    if "gemma3" in lower or "gemma-3" in lower:
+        if "1b" in lower:
+            return "Gemma 3 1B"
+        return "Gemma 3"
+    if "gemma-4" in lower or "gemma4" in lower:
+        if "e2b" in lower:
+            return "Gemma 4 E2B"
+        if "e4b" in lower:
+            return "Gemma 4 E4B"
+        return "Gemma 4"
+    return Path(filename).stem.replace("_", " ").replace("-", " ").strip() or filename
+
+
+def _infer_model_tier(filename: str, size_bytes: int) -> str:
+    lower = filename.lower()
+    if "e4b" in lower or size_bytes >= 3 * 1024 * 1024 * 1024:
+        return "full"
+    if "e2b" in lower or size_bytes >= 1024 * 1024 * 1024:
+        return "medium"
+    return "light"
+
+
+def _model_description(filename: str, size_bytes: int, registry: dict) -> str:
+    if registry.get("description"):
+        return registry["description"]
+    size_hint = _format_model_size(size_bytes)
+    return f"端侧文本模型（{size_hint}）。用于本地照护理解与建议生成；语音当前先由系统转成可编辑文本。"
 
 
 def _resolve_model_file(filename: str) -> Path:
@@ -734,24 +784,23 @@ def _resolve_model_file(filename: str) -> Path:
 def _build_model_entry(path: Path) -> dict:
     stat = path.stat()
     registry = GEMMA_MODEL_REGISTRY.get(path.name, {})
-    download_url = registry.get("download_url") if GEMMA_MODEL_DOWNLOAD_MODE != "stream" else None
     return {
         "id": path.name,                       # stable ID = filename
         "filename": path.name,
-        "display_name": registry.get("display_name", path.stem),
-        "description": registry.get("description", ""),
+        "display_name": registry.get("display_name", _infer_model_display_name(path.name)),
+        "description": _model_description(path.name, stat.st_size, registry),
         "supports_audio": bool(registry.get("supports_audio", False)),
-        "tier": registry.get("tier", "unknown"),
+        "tier": registry.get("tier", _infer_model_tier(path.name, stat.st_size)),
         "size_bytes": stat.st_size,
         "format": path.suffix.lstrip("."),
-        "download_path": download_url or f"/api/models/{path.name}",
+        "download_path": f"/api/models/{path.name}",
         "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
     }
 
 
 def _build_registry_model_entry(filename: str) -> dict:
     registry = GEMMA_MODEL_REGISTRY.get(filename)
-    if not registry or not registry.get("download_url"):
+    if not registry or (not registry.get("download_url") and not GEMMA_GCS_MODEL_BUCKET):
         raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
     suffix = Path(filename).suffix.lower()
     if suffix not in GEMMA_MODEL_EXTENSIONS:
@@ -759,15 +808,105 @@ def _build_registry_model_entry(filename: str) -> dict:
     return {
         "id": filename,
         "filename": filename,
-        "display_name": registry.get("display_name", Path(filename).stem),
-        "description": registry.get("description", ""),
+        "display_name": registry.get("display_name", _infer_model_display_name(filename)),
+        "description": _model_description(filename, int(registry.get("size_bytes", 0)), registry),
         "supports_audio": bool(registry.get("supports_audio", False)),
-        "tier": registry.get("tier", "unknown"),
+        "tier": registry.get("tier", _infer_model_tier(filename, int(registry.get("size_bytes", 0)))),
         "size_bytes": int(registry.get("size_bytes", 0)),
         "format": suffix.lstrip("."),
-        "download_path": registry.get("download_url") or f"/api/models/{filename}",
-        "modified_at": "remote",
+        "download_path": f"/api/models/{filename}",
+        "modified_at": "gcs" if GEMMA_GCS_MODEL_BUCKET else "remote",
     }
+
+
+def _build_gcs_model_entry(filename: str, size_bytes: int, updated_at: datetime | None = None) -> dict:
+    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+    suffix = Path(filename).suffix.lower()
+    if suffix not in GEMMA_MODEL_EXTENSIONS:
+        raise HTTPException(status_code=415, detail=f"不支持的模型格式：{suffix}")
+    return {
+        "id": filename,
+        "filename": filename,
+        "display_name": registry.get("display_name", _infer_model_display_name(filename)),
+        "description": _model_description(filename, size_bytes, registry),
+        "supports_audio": bool(registry.get("supports_audio", False)),
+        "tier": registry.get("tier", _infer_model_tier(filename, size_bytes)),
+        "size_bytes": size_bytes or int(registry.get("size_bytes", 0)),
+        "format": suffix.lstrip("."),
+        "download_path": f"/api/models/{filename}",
+        "modified_at": updated_at.isoformat() if updated_at else "gcs",
+    }
+
+
+def _gcs_model_object_name(filename: str) -> str:
+    return f"{GEMMA_GCS_MODEL_PREFIX}/{filename}" if GEMMA_GCS_MODEL_PREFIX else filename
+
+
+def _has_gcs_model_config(filename: str) -> bool:
+    return bool(GEMMA_GCS_MODEL_BUCKET and Path(filename).suffix.lower() in GEMMA_MODEL_EXTENSIONS)
+
+
+def _list_gcs_model_entries() -> list[dict]:
+    if not GEMMA_GCS_MODEL_BUCKET or not GEMMA_GCS_DYNAMIC_CATALOG:
+        return []
+    try:
+        from google.cloud import storage
+    except ImportError:
+        print("[models] google-cloud-storage is not installed; dynamic GCS catalog disabled")
+        return []
+
+    prefix = f"{GEMMA_GCS_MODEL_PREFIX}/" if GEMMA_GCS_MODEL_PREFIX else ""
+    entries: list[dict] = []
+    try:
+        blobs = storage.Client().list_blobs(GEMMA_GCS_MODEL_BUCKET, prefix=prefix)
+        for blob in blobs:
+            object_name = blob.name
+            if not object_name or object_name.endswith("/"):
+                continue
+            filename = object_name[len(prefix):] if prefix and object_name.startswith(prefix) else object_name
+            # Keep the mobile-facing model ID as a plain filename. Nested
+            # folders under the prefix are intentionally ignored so download
+            # URLs stay path-traversal safe and backwards compatible.
+            if not filename or "/" in filename or "\\" in filename:
+                continue
+            if Path(filename).suffix.lower() not in GEMMA_MODEL_EXTENSIONS:
+                continue
+            entries.append(_build_gcs_model_entry(filename, int(blob.size or 0), blob.updated))
+    except Exception as exc:
+        print(f"[models] failed to list GCS catalog gs://{GEMMA_GCS_MODEL_BUCKET}/{prefix}: {exc}")
+        return []
+    return entries
+
+
+def _build_gcs_model_entry_from_metadata(filename: str) -> dict:
+    if not _has_gcs_model_config(filename):
+        raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
+    try:
+        from google.cloud import storage
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="后端缺少 google-cloud-storage 依赖，无法读取 Cloud Storage 模型目录。") from exc
+
+    object_name = _gcs_model_object_name(filename)
+    try:
+        blob = storage.Client().bucket(GEMMA_GCS_MODEL_BUCKET).blob(object_name)
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail=f"Cloud Storage 中未找到模型文件：gs://{GEMMA_GCS_MODEL_BUCKET}/{object_name}")
+        blob.reload()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"无法访问 Cloud Storage 模型元数据：{exc}") from exc
+    return _build_gcs_model_entry(filename, int(blob.size or 0), blob.updated)
+
+
+def _model_sort_key(entry: dict) -> tuple:
+    tier_order = {"light": 0, "medium": 1, "full": 2, "unknown": 3}
+    return (
+        entry.get("id") != GEMMA_RECOMMENDED_MODEL_ID,
+        tier_order.get(str(entry.get("tier", "unknown")), 3),
+        int(entry.get("size_bytes") or 0),
+        str(entry.get("id", "")),
+    )
 
 
 @app.get("/api/models")
@@ -783,11 +922,16 @@ async def list_models():
             if path.is_file() and path.suffix.lower() in GEMMA_MODEL_EXTENSIONS:
                 entries.append(_build_model_entry(path))
                 seen.add(path.name)
+    for entry in _list_gcs_model_entries():
+        if entry["id"] not in seen:
+            entries.append(entry)
+            seen.add(entry["id"])
     if GEMMA_MODEL_DOWNLOAD_MODE != "stream":
         for filename in sorted(GEMMA_REMOTE_MODEL_IDS):
-            if filename not in seen:
+            registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+            if filename not in seen and (registry.get("download_url") or _has_gcs_model_config(filename)):
                 entries.append(_build_registry_model_entry(filename))
-    return {"models": entries, "model_dir": str(GEMMA_MODEL_DIR)}
+    return {"models": sorted(entries, key=_model_sort_key), "model_dir": str(GEMMA_MODEL_DIR)}
 
 
 @app.get("/api/models/{filename}/meta")
@@ -797,6 +941,8 @@ async def model_meta(filename: str):
     try:
         return _build_model_entry(_resolve_model_file(filename))
     except HTTPException:
+        if GEMMA_GCS_MODEL_BUCKET and _has_gcs_model_config(filename):
+            return _build_gcs_model_entry_from_metadata(filename)
         if GEMMA_MODEL_DOWNLOAD_MODE != "stream":
             return _build_registry_model_entry(filename)
         raise
@@ -806,20 +952,26 @@ async def model_meta(filename: str):
 async def model_download(filename: str):
     """Serve a specific on-device weight file.
 
-    For demo sharing, the default mode redirects to the model CDN. This keeps
-    the APK-compatible `/api/models/<filename>` URL stable without pushing a
-    multi-GB file through a fragile local tunnel. Set
-    `CAREMIND_MODEL_DOWNLOAD_MODE=stream` to proxy the local file directly.
+    Local files are always preferred. This keeps the APK-compatible
+    `/api/models/<filename>` URL stable while avoiding gated HuggingFace URLs
+    being exposed to phones. If a registry-only model is requested and the
+    file is not present, the backend returns a clear setup error.
     """
-    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
-    download_url = registry.get("download_url")
-
-    if GEMMA_MODEL_DOWNLOAD_MODE != "stream" and download_url:
-        from fastapi.responses import RedirectResponse
-
-        return RedirectResponse(str(download_url), status_code=302)
-
-    path = _resolve_model_file(filename)
+    try:
+        path = _resolve_model_file(filename)
+    except HTTPException as exc:
+        registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+        if exc.status_code == 404 and _has_gcs_model_config(filename):
+            return _deliver_gcs_model(filename)
+        if exc.status_code == 404 and registry.get("download_url"):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "后端尚未托管该端侧模型文件。请把模型文件放入 "
+                    f"{GEMMA_MODEL_DIR} 后重启服务，或配置后端代理受限模型源。"
+                ),
+            ) from exc
+        raise
     size_bytes = path.stat().st_size
 
     def iterfile():
@@ -845,11 +997,64 @@ async def model_download(filename: str):
     )
 
 
+def _deliver_gcs_model(filename: str):
+    if GEMMA_GCS_MODEL_DELIVERY != "proxy":
+        from fastapi.responses import RedirectResponse
+
+        object_name = _gcs_model_object_name(filename)
+        public_url = f"https://storage.googleapis.com/{GEMMA_GCS_MODEL_BUCKET}/{object_name}"
+        return RedirectResponse(public_url, status_code=302)
+    return _stream_gcs_model(filename)
+
+
+def _stream_gcs_model(filename: str):
+    try:
+        from google.cloud import storage
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="后端缺少 google-cloud-storage 依赖，无法从 Cloud Storage 下载模型。") from exc
+
+    object_name = _gcs_model_object_name(filename)
+    try:
+        blob = storage.Client().bucket(GEMMA_GCS_MODEL_BUCKET).blob(object_name)
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail=f"Cloud Storage 中未找到模型文件：gs://{GEMMA_GCS_MODEL_BUCKET}/{object_name}")
+        blob.reload()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"无法访问 Cloud Storage 模型文件：{exc}") from exc
+
+    def iter_gcs_file():
+        with blob.open("rb") as fp:
+            while True:
+                chunk = fp.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    from fastapi.responses import StreamingResponse
+
+    size_bytes = int(blob.size or GEMMA_MODEL_REGISTRY.get(filename, {}).get("size_bytes", 0))
+
+    return StreamingResponse(
+        iter_gcs_file(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Length": str(size_bytes),
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Model-Format": Path(filename).suffix.lstrip(".") or "bin",
+            "X-Model-Source": "gcs",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
 # ----- Backwards-compatible legacy aliases -----------------------------------
-# The first APK build used /api/models/gemma and /api/models/gemma/meta hard-
-# coded against gemma-4-E4B-it.litertlm. Keep them alive so an already-
-# installed app keeps working until users update.
-_LEGACY_DEFAULT_MODEL = "gemma-4-E4B-it.litertlm"
+# The first APK build used /api/models/gemma and /api/models/gemma/meta.
+# Point the alias at the lightweight model used by the hardware demo. Larger
+# E2B/E4B files are still listed as optional, but they are not safe defaults on
+# most teammate phones.
+_LEGACY_DEFAULT_MODEL = GEMMA_RECOMMENDED_MODEL_ID
 
 
 @app.get("/api/models/gemma/meta")

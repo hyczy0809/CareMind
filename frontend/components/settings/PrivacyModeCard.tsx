@@ -113,7 +113,7 @@ export function PrivacyModeCard() {
         </View>
         <View style={styles.headerText}>
           <Text style={styles.title}>隐私模式</Text>
-          <Text style={styles.subtitle}>开启后所有 AI 推理在本机进行，不再上传照护记录或音频。</Text>
+          <Text style={styles.subtitle}>开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。</Text>
         </View>
         <Switch
           value={privacyOn}
@@ -128,7 +128,7 @@ export function PrivacyModeCard() {
       {showBanner ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>
-            当前选中的模型尚未就绪，部分请求会临时回退到云端。语音转写在隐私模式下不会上传，请先下载本地模型。
+            当前选中的模型尚未就绪，文字请求可能回退到云端。若要离线演示，请下载并选择 Gemma 3 1B；语音暂不走本地模型。
           </Text>
         </View>
       ) : null}

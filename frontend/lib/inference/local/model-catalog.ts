@@ -10,11 +10,11 @@ export interface ModelCatalogEntry {
   /** Stable identifier == the filename. */
   id: string;
   filename: string;
-  /** Human-readable name shown in the picker (e.g. "Gemma 4 E2B"). */
+  /** Human-readable name shown in the picker (e.g. "Gemma 3 1B"). */
   display_name: string;
   /** One-line description shown under the name. */
   description: string;
-  /** True for multimodal models (audio input supported). */
+  /** True only when a model/native path supports direct audio input. */
   supports_audio: boolean;
   /** "light" | "medium" | "full" | "unknown". Used for badge colour. */
   tier: string;
@@ -38,16 +38,15 @@ const FALLBACK_CATALOG: ModelCatalog = {
   model_dir: "builtin",
   models: [
     {
-      id: "gemma-4-E2B-it.litertlm",
-      filename: "gemma-4-E2B-it.litertlm",
-      display_name: "Gemma 4 E2B",
-      description: "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
-      supports_audio: true,
-      tier: "medium",
-      size_bytes: 2588147712,
+      id: "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
+      filename: "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
+      display_name: "Gemma 3 1B",
+      description: "推荐端侧演示模型（~560 MB）。适合中端机，速度快；语音当前先由系统转成可编辑文本。",
+      supports_audio: false,
+      tier: "light",
+      size_bytes: 584417280,
       format: "litertlm",
-      download_path:
-        "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
+      download_path: "/api/models/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
       modified_at: "fallback"
     }
   ]

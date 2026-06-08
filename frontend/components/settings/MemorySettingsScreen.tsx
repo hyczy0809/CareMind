@@ -90,7 +90,7 @@ export function MemorySettingsScreen() {
   return (
     <Screen>
       <PageHeader title="已记住的信息" subtitle={`${patient.nickname} · 可随时编辑或删除`} right={<View />} />
-      <SectionTitle title="隐私模式" helper="决定 AI 推理是否完全在本机进行" />
+      <SectionTitle title="隐私模式" helper="选择是否优先使用本机模型处理照护记录" />
       <PrivacyModeCard />
       <SectionTitle title="关于已记住的信息" />
       <Card tone="info">

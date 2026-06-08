@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import {
@@ -965,15 +965,17 @@ export function FollowupPrepScreen() {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>可复制复诊摘要</Text>
             <Text style={styles.sheetHelper}>可直接复制到微信、备忘录，或复诊时给医生看。</Text>
-            <TextInput
+            <ScrollView
               accessibilityLabel="可复制复诊摘要"
-              multiline
-              editable={false}
-              selectTextOnFocus
-              value={copySummaryText}
-              style={styles.copyInput}
-              textAlignVertical="top"
-            />
+              style={styles.copyScroll}
+              contentContainerStyle={styles.copyScrollContent}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+            >
+              <Text selectable style={styles.copyText}>
+                {copySummaryText}
+              </Text>
+            </ScrollView>
             <View style={styles.sheetActions}>
               <Button label="复制整段文字" loading={copying} onPress={copySummaryToClipboard} />
               <Button label="关闭" variant="ghost" onPress={() => setCopySheetVisible(false)} />
@@ -1324,15 +1326,20 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
     marginTop: 6
   },
-  copyInput: {
+  copyScroll: {
     minHeight: 260,
     maxHeight: 420,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
     backgroundColor: colors.surface.card,
+    marginTop: 14
+  },
+  copyScrollContent: {
     padding: 12,
-    marginTop: 14,
+    paddingBottom: 18
+  },
+  copyText: {
     ...typography.helper,
     color: colors.text.primary
   },

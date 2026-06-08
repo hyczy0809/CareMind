@@ -3,7 +3,7 @@
 ![MVP](https://img.shields.io/badge/status-MVP-238663)
 ![Frontend](https://img.shields.io/badge/frontend-Expo%20%2B%20React%20Native-2B241D)
 ![Backend](https://img.shields.io/badge/backend-FastAPI-245847)
-![On Device](https://img.shields.io/badge/on--device-Gemma%204%20E2B-D98253)
+![On Device](https://img.shields.io/badge/on--device-Gemma%203%201B-D98253)
 ![Safety](https://img.shields.io/badge/safety-non--diagnostic-476F92)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
@@ -19,13 +19,14 @@ It is built for family caregivers, not clinicians. CareMind does not diagnose, p
 | Shows only the most important care actions for tonight | The product reduces decision load instead of adding another checklist |
 | Produces lower-conflict communication scripts | Families get words to use in difficult moments |
 | Aggregates reviewed records into follow-up summaries | Clinic visits become less dependent on memory alone |
-| Supports a privacy mode with Gemma 4 E2B on device | Sensitive care context can stay closer to the phone |
+| Supports a privacy mode with Gemma 3 1B on device | Sensitive care context can stay closer to the phone |
 
 ## Contents
 
 - [Demo](#demo)
 - [Who It Is For](#who-it-is-for)
-- [How Gemma 4 Is Used](#how-gemma-4-is-used)
+- [How Gemma Is Used](#how-gemma-is-used)
+- [Edge AI Hardware Demo](#edge-ai-hardware-demo)
 - [Product Surface](#product-surface)
 - [Core Features](#core-features)
 - [Tech Stack](#tech-stack)
@@ -78,18 +79,88 @@ Write or speak one care moment
 -> Follow-up Prep turns records into doctor-facing copy
 ```
 
-## How Gemma 4 Is Used
+## How Gemma Is Used
 
-CareMind uses Gemma 4 as an application-layer model option, not as a hard-coded product dependency.
+CareMind uses Gemma as an application-layer model option, not as a hard-coded product dependency.
 
 In the current Android MVP:
 
-- **Gemma 4 E2B** can be downloaded for privacy mode and used for on-device care understanding and recommendation generation.
+- **Gemma 3 1B** is the recommended privacy-mode model for the hardware demo. It is small enough for ordinary Android phones and is used for on-device care-note understanding and suggestion generation.
+- **Gemma 4 E2B / E4B** remain optional larger experiments, but they are not the default because they can exceed memory limits and crash on many real phones.
 - **Cloud mode** uses an OpenAI-compatible API route for the full agent workflow and knowledge-backed responses.
 - **Voice input** currently uses Android system speech recognition to turn speech into editable text. Local Gemma audio transcription is feature-flagged off until the native audio path is stable.
-- Model weights are not committed to the repository. The app discovers and downloads supported `.litertlm` models through the model catalog.
+- The Edge AI demo model currently served by the backend is `Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm` (`.litertlm`, about 557 MB). It should be distributed through an external model artifact host or Git LFS, not normal Git history.
 
 This split lets CareMind demonstrate both a practical cloud Agent workflow and a privacy-oriented on-device path for sensitive family-care data.
+
+## Edge AI Hardware Demo
+
+CareMind's Track C / Edge AI story is the Android privacy mode:
+
+```text
+Care note on phone
+-> Gemma 3 1B LiteRT model loaded on Android device
+-> local care-note understanding and suggestion generation
+-> no cloud model call for the sensitive note
+```
+
+### Demo Hardware
+
+The hardware demo can be recorded on a real Android phone.
+
+Recommended recording checklist:
+
+1. Open CareMind on the Android device.
+2. Enter Settings / Privacy Mode.
+3. Show `Gemma 3 1B` as available or loaded.
+4. Turn off Wi-Fi and mobile data.
+5. Enter a care note such as:
+
+```text
+外婆夜里醒了四次，一直说有人偷钱，晚饭只吃了几口，妈妈也很累。
+```
+
+6. Show CareMind returning local, non-diagnostic care observations and lower-burden next actions.
+
+Suggested video caption:
+
+```text
+Network off. Gemma LiteRT runs on the Android device for local care-note understanding.
+```
+
+### Model File
+
+For the hardware demo, place the model where the Android app can discover it:
+
+```bash
+adb push Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm /sdcard/Android/data/<your.package.name>/files/models/
+```
+
+The current local model artifact used during development is:
+
+```text
+Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm
+Size: about 557 MB
+Runtime target: Android / Google AI Edge LiteRT
+Mode: optional privacy mode, not required for cloud mode
+```
+
+If the model is stored in GitHub, it must be tracked with Git LFS:
+
+```bash
+git lfs install
+git lfs track "*.litertlm"
+git lfs track "*.task"
+git add .gitattributes Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm
+git commit -m "Add Gemma LiteRT model artifact via Git LFS"
+git push
+```
+
+Normal Git should not be used for this file because GitHub rejects very large regular Git blobs.
+
+### Scope Boundary
+
+The Edge AI demo focuses on local text understanding and care suggestion generation. Voice input currently uses the Android system speech interface to convert speech into editable text before the model step.
 
 ## Product Surface
 
@@ -121,7 +192,7 @@ This split lets CareMind demonstrate both a practical cloud Agent workflow and a
 | Agent route | OpenAI-compatible `/v1/chat/completions` |
 | Business APIs | Typed `/api/*` endpoints |
 | Cloud model adapter | Cloudflare AI Gateway / OpenAI-compatible endpoint |
-| On-device model | Gemma 4 E2B `.litertlm` via Android native module |
+| On-device model | Gemma 3 1B `.litertlm` via Android native module |
 | Memory | JSON-backed MVP memory store |
 | Documents | Local upload storage and caregiver review flow |
 | Demo video | Single-file HTML canvas animation rendered to WebM |
@@ -191,8 +262,12 @@ Create `.env` from [.env.example](.env.example).
 | `TRANSCRIPTION_API_KEY` | optional for cloud STT | Speech transcription provider key; falls back to `OPENAI_API_KEY`, `MODEL_API_KEY`, or `CF_AIG_TOKEN` |
 | `TRANSCRIPTION_MODEL` | optional | Speech transcription model, default `gpt-4o-mini-transcribe` |
 | `TRANSCRIPTION_BASE_URL` | optional | OpenAI-compatible transcription endpoint, default `https://api.openai.com/v1` |
-| `CAREMIND_MODEL_DOWNLOAD_MODE` | optional | `redirect` or `stream` for model downloads |
+| `CAREMIND_MODEL_DOWNLOAD_MODE` | optional | `proxy` or `stream`; local files are preferred, GCS proxy is used when configured |
 | `CAREMIND_REMOTE_MODEL_IDS` | optional | Comma-separated remote `.litertlm` model ids |
+| `CAREMIND_GCS_MODEL_BUCKET` | optional | Cloud Storage bucket used for dynamic on-device model catalog and downloads |
+| `CAREMIND_GCS_MODEL_PREFIX` | optional | Object prefix for model files, default `models`; every `.litertlm` / `.task` file under this prefix appears in `/api/models` |
+| `CAREMIND_GCS_DYNAMIC_CATALOG` | optional | `1` by default; when enabled, Cloud Run scans the GCS prefix so new models appear without rebuilding the APK |
+| `CAREMIND_GCS_MODEL_DELIVERY` | optional | `redirect` avoids Cloud Run large-response limits; `proxy` streams through backend |
 | `PROMPT_MODE` | optional | `WEAK` or `STRONG` prompt mode |
 | `PORT` | optional | Default `python main.py` port |
 | `DRUGBANK_API_KEY` | optional | External MCP drug knowledge source |
@@ -206,7 +281,33 @@ MODEL_NAME=google-ai-studio/gemini-2.5-flash
 TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
 PROMPT_MODE=WEAK
 PORT=8080
+CAREMIND_GCS_MODEL_BUCKET=caremind-498713-models
+CAREMIND_GCS_MODEL_PREFIX=models
+CAREMIND_GCS_DYNAMIC_CATALOG=1
+CAREMIND_GCS_MODEL_DELIVERY=redirect
 ```
+
+### Dynamic On-device Model Catalog
+
+The Android APK does not hard-code the downloadable model list. It calls:
+
+```http
+GET /api/models
+```
+
+When `CAREMIND_GCS_MODEL_BUCKET` is configured, Cloud Run scans:
+
+```text
+gs://<CAREMIND_GCS_MODEL_BUCKET>/<CAREMIND_GCS_MODEL_PREFIX>/
+```
+
+Every `.litertlm` or `.task` file directly under that prefix is returned to the app with a stable `/api/models/<filename>` download path. To add a new demo model:
+
+```bash
+gcloud storage cp ./your-model.litertlm gs://caremind-498713-models-asia/models/
+```
+
+Users can tap **刷新** in the privacy-mode model picker; the backend scans GCS dynamically, so the APK does not need to be rebuilt.
 
 ## Android APK Notes
 
@@ -321,7 +422,7 @@ flowchart TD
     E --> H["OpenAI-compatible model adapter"]
     H --> I["Cloud provider or Gemma-compatible endpoint"]
     A --> J["Android on-device module"]
-    J --> K["Gemma 4 E2B .litertlm"]
+    J --> K["Gemma 3 1B .litertlm"]
     J --> L["Android SpeechRecognizer"]
     C --> M["Follow-up summary data"]
 ```

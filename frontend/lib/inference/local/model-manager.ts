@@ -8,7 +8,7 @@
 // out of the React components.
 
 import { useEffect, useState } from "react";
-import { buildModelDownloadUrl } from "./constants";
+import { buildModelDownloadUrl, DEFAULT_MODEL_FILENAME } from "./constants";
 import { Gemma, GEMMA_NATIVE_AVAILABLE, subscribeDownloadProgress } from "./gemma-native";
 import {
   fetchModelCatalog,
@@ -65,6 +65,16 @@ let state: ManagerState = {
   selectedModelId: getSelectedModelIdSync()
 };
 const subs = new Set<(s: ManagerState) => void>();
+const HIGH_RISK_MODEL_IDS = new Set(["gemma-4-E2B-it.litertlm", "gemma-4-E4B-it.litertlm"]);
+
+function preferredModelId(catalog: ModelCatalogEntry[]): string | null {
+  return (
+    catalog.find((entry) => entry.id === DEFAULT_MODEL_FILENAME)?.id ??
+    catalog.find((entry) => entry.tier === "light")?.id ??
+    catalog[0]?.id ??
+    null
+  );
+}
 
 function emit() {
   for (const sub of subs) {
@@ -225,11 +235,25 @@ export async function setStubMode(enabled: boolean): Promise<void> {
  * the first ready model in the catalog if no explicit selection exists.
  */
 export async function resolveSelectedModelFilename(): Promise<string | null> {
-  const selected = state.selectedModelId;
-  if (selected) return selected;
   const catalog = await fetchModelCatalog();
-  if (catalog.models.length > 0) return catalog.models[0].id;
-  return null;
+  const preferred = preferredModelId(catalog.models);
+  const selected = state.selectedModelId;
+  if (!selected) return preferred;
+
+  const exists = catalog.models.some((entry) => entry.id === selected);
+  if (HIGH_RISK_MODEL_IDS.has(selected) && preferred && preferred !== selected) {
+    await setSelectedModelId(preferred);
+    return preferred;
+  }
+  if (!exists && preferred) {
+    await setSelectedModelId(preferred);
+    return preferred;
+  }
+  if (!exists) {
+    await setSelectedModelId(null);
+    return null;
+  }
+  return selected;
 }
 
 /**
@@ -313,20 +337,25 @@ export async function refreshCatalogNow(): Promise<ModelCatalogEntry[]> {
   return refreshAllFromCatalog();
 }
 
-/** Auto-select the first model in the catalog if no selection has been made. */
+/** Auto-select the safest recommended model if no selection has been made. */
 export async function ensureSelectionFromCatalog(catalog: ModelCatalogEntry[]): Promise<void> {
+  const preferred = preferredModelId(catalog);
   if (state.selectedModelId) {
-    // If the persisted selection is no longer in the catalog, clear it.
+    // If the persisted selection is no longer in the catalog, move to the
+    // recommended lightweight model. Older APKs could persist E2B/E4B; migrate
+    // those away as well because they are the most common source of OOM exits.
     const exists = catalog.some((m) => m.id === state.selectedModelId);
-    if (!exists && catalog.length > 0) {
-      await setSelectedModelId(catalog[0].id);
+    if (!exists && preferred) {
+      await setSelectedModelId(preferred);
     } else if (!exists) {
       await setSelectedModelId(null);
+    } else if (HIGH_RISK_MODEL_IDS.has(state.selectedModelId) && preferred && preferred !== state.selectedModelId) {
+      await setSelectedModelId(preferred);
     }
     return;
   }
-  if (catalog.length > 0) {
-    await setSelectedModelId(catalog[0].id);
+  if (preferred) {
+    await setSelectedModelId(preferred);
   }
 }
 
