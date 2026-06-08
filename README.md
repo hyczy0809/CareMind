@@ -7,40 +7,26 @@
 ![Safety](https://img.shields.io/badge/safety-non--diagnostic-476F92)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-CareMind is a dementia family-care navigation app that helps caregivers turn messy daily care moments into structured logs, safer next actions, communication scripts, and copyable follow-up summaries.
+CareMind 是一款面向失智症家庭照护者的 AI 照护导航 Agent。它帮助家属把混乱、零散、情绪化的日常照护记录，整理成结构化日志、今晚可执行的小行动、低冲突沟通话术和可复制的复诊摘要。
 
-It is built for family caregivers, not clinicians. CareMind does not diagnose, prescribe, decide medical tests, or replace emergency help.
+CareMind 不诊断、不处方、不判断是否需要检查，也不替代医生或急救服务。它的定位是：**帮助家庭更清楚地记录、理解、沟通和准备复诊**。
 
-## Team
+CareMind Team：张媛、连婕妤、刘畅、郭鸿宇
 
-CareMind Team: 张媛、连婕妤、刘畅、郭鸿宇
+## 评审快速入口
 
-## At A Glance
-
-| What it does | Why it matters |
+| 想快速确认 | 入口 |
 |---|---|
-| Turns one messy note into structured care signals | Caregivers do not need to remember every detail under stress |
-| Shows only the most important care actions for tonight | The product reduces decision load instead of adding another checklist |
-| Produces lower-conflict communication scripts | Families get words to use in difficult moments |
-| Aggregates reviewed records into follow-up summaries | Clinic visits become less dependent on memory alone |
-| Supports a privacy mode with Gemma 3 1B on device | Sensitive care context can stay closer to the phone |
+| 公开视频 | [Bilibili BV1hFEg6ZEVb](https://www.bilibili.com/video/BV1hFEg6ZEVb) |
+| 在线后端 | [https://caremind-1039168666325.us-west1.run.app](https://caremind-1039168666325.us-west1.run.app) |
+| PRD | [docs/PRD.md](docs/PRD.md) |
+| 前端说明 | [frontend/README.md](frontend/README.md) |
+| Demo 录制说明 | [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md) |
+| 端侧模型核心代码 | [frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma) |
+| 本地 / 云端推理路由 | [frontend/lib/inference](frontend/lib/inference) |
+| 后端 Agent 工作流 | [my_agent](my_agent) |
 
-## Contents
-
-- [Demo](#demo)
-- [Who It Is For](#who-it-is-for)
-- [How Gemma Is Used](#how-gemma-is-used)
-- [Edge AI Hardware Demo](#edge-ai-hardware-demo)
-- [Product Surface](#product-surface)
-- [Core Features](#core-features)
-- [Tech Stack](#tech-stack)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Android APK Notes](#android-apk-notes)
-- [API Examples](#api-examples)
-- [Architecture](#architecture)
-- [Project Layout](#project-layout)
-- [Safety Boundaries](#safety-boundaries)
+建议先看 1 分钟视频，再阅读下面的 Edge AI、启动方式和安全边界。视频文件不放入 Git 历史，README 使用可点击封面图链接到公开视频。
 
 ## Demo
 
@@ -50,66 +36,96 @@ CareMind Team: 张媛、连婕妤、刘畅、郭鸿宇
   </a>
 </p>
 
-Demo assets kept in Git:
+Demo 相关文件：
 
-- Public demo video: [Bilibili BV1hFEg6ZEVb](https://www.bilibili.com/video/BV1hFEg6ZEVb)
-- Preview image: [docs/demo-video/generated/caremind-demo-video-preview.png](docs/demo-video/generated/caremind-demo-video-preview.png)
-- Storyboard: [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md)
-- Recording guide: [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md)
+- 公开视频：[Bilibili BV1hFEg6ZEVb](https://www.bilibili.com/video/BV1hFEg6ZEVb)
+- 视频封面：[docs/demo-video/generated/caremind-demo-video-preview.png](docs/demo-video/generated/caremind-demo-video-preview.png)
+- 分镜脚本：[docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md)
+- 录制指南：[docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md)
 
-Rendered video files and browser-generated HTML are intentionally not tracked in normal Git history. Regenerate them locally when preparing a pitch or social video.
-
-Core demo input:
+Demo 核心输入：
 
 ```text
 妈妈昨晚起来四次，今天一直说有人偷她的钱，晚饭只吃了几口。我也快撑不住了。
 ```
 
-CareMind turns this into:
+CareMind 会整理出：
 
-- Sleep: night waking x4
-- Behavior: repeated suspicion / "someone stole money"
-- Nutrition: low dinner intake
-- Caregiver: high burden signal
-- Tonight actions: night light, clear walkway, record food and water, ask for help when possible
-- Script: do not say "没人偷，你别乱想"; try "你是不是很担心？我陪你一起找找。"
-- Follow-up: doctor questions, materials checklist, and copyable summary
+- 睡眠：夜间起床 4 次
+- 行为：反复表达“有人偷钱”
+- 饮食：晚饭摄入偏少
+- 照护者：出现高压力信号
+- 今晚行动：开夜灯、确认门锁、记录饮食饮水、必要时请家人轮替
+- 沟通话术：不建议说“没人偷，你别乱想”；可尝试“你是不是很担心？我陪你一起找找。”
+- 复诊准备：生成医生问题清单、资料清单和可复制摘要
 
-## Who It Is For
+## 阅读路径
 
-CareMind is designed for people caring for a loved one with dementia at home: adult children, spouses, and other family caregivers.
+| 如果你想确认 | 建议阅读 |
+|---|---|
+| 产品到底解决什么问题 | [项目定位](#项目定位)、[核心功能](#核心功能) |
+| C 赛道 / Edge AI 怎么体现 | [Gemma 使用方式](#gemma-使用方式)、[Edge AI 硬件演示](#edge-ai-硬件演示) |
+| 端侧模型如何下载和切换 | [动态端侧模型目录](#动态端侧模型目录)、[Android APK 说明](#android-apk-说明) |
+| 后端如何启动 | [快速启动](#快速启动)、[Docker 启动](#docker-启动) |
+| 是否有 Tool Calling | [Native Function Calling / Tool Calling](#native-function-calling--tool-calling) |
+| 医疗边界是否清楚 | [安全边界](#安全边界) |
 
-The primary user is often tired, interrupted, and emotionally overloaded. The product therefore avoids dense dashboards and long forms. The core interaction is intentionally simple:
+## 目录
+
+- [项目定位](#项目定位)
+- [Gemma 使用方式](#gemma-使用方式)
+- [Edge AI 硬件演示](#edge-ai-硬件演示)
+- [产品页面](#产品页面)
+- [核心功能](#核心功能)
+- [技术栈](#技术栈)
+- [快速启动](#快速启动)
+- [配置](#配置)
+- [Android APK 说明](#android-apk-说明)
+- [API 示例](#api-示例)
+- [架构](#架构)
+- [项目结构](#项目结构)
+- [安全边界](#安全边界)
+- [贡献](#贡献)
+
+## 项目定位
+
+CareMind 面向在家照护失智症亲人的家庭成员，包括子女、配偶和其他主要照护者。
+
+这类用户通常很累、经常被打断，也很难在复诊时准确回忆过去一周发生了什么。因此 CareMind 不做复杂仪表盘，而是围绕一个简单闭环设计：
 
 ```text
-Write or speak one care moment
--> CareMind structures it
--> Today Care shows what matters tonight
--> Follow-up Prep turns records into doctor-facing copy
+写下或说出一件照护事件
+-> CareMind 整理成结构化记录
+-> 今日照护显示今晚最值得关注的事
+-> 复诊准备把记录整理成医生能快速理解的材料
 ```
 
-## How Gemma Is Used
+## Gemma 使用方式
 
-CareMind uses Gemma as an application-layer model option, not as a hard-coded product dependency.
+CareMind 把 Gemma 作为应用层模型能力，而不是硬编码依赖。
 
-In the current Android MVP:
+当前 Android MVP 中：
 
-- **Gemma 3 1B** is the recommended privacy-mode model for the hardware demo. It is small enough for ordinary Android phones and is used for on-device care-note understanding and suggestion generation.
-- **Gemma 4 E2B / E4B** remain optional larger experiments, but they are not the default because they can exceed memory limits and crash on many real phones.
-- **Cloud mode** uses an OpenAI-compatible API route for the full agent workflow and knowledge-backed responses.
-- **Cloud Agent tool calling** is implemented through Google ADK agents and an OpenAI-compatible model adapter. `my_agent/cloud_agents.py` registers care and memory tools, while `my_agent/cloudflare_openai_model.py` converts those function declarations into `tools` / `tool_choice: auto` payloads and maps returned `tool_calls` back into ADK function calls.
-- **Voice input** currently uses Android system speech recognition to turn speech into editable text. Local Gemma audio transcription is feature-flagged off until the native audio path is stable.
-- The Edge AI demo model currently served by the backend is `Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm` (`.litertlm`, about 557 MB).
-- The APK loads its downloadable model list from `GET /api/models`; the Cloud Run backend scans Google Cloud Storage dynamically, so adding a new model does not require rebuilding the APK.
-- Model files should live in Google Cloud Storage or Git LFS, not normal Git history.
+- **Gemma 3 1B** 是推荐的隐私模式演示模型，体积约 557 MB，更适合普通 Android 手机，用于端侧照护文本理解和建议生成。
+- **Gemma 4 E2B / E4B** 作为较大模型实验保留，但不是默认选项，因为它们在不少真机上更容易出现内存压力或闪退。
+- **云端模式** 通过 OpenAI-compatible API 路由运行完整 Agent 工作流和知识增强回复。
+- **云端 Agent Tool Calling** 使用 Google ADK agents 和 OpenAI-compatible model adapter 实现。`my_agent/cloud_agents.py` 注册照护、风险、Memory 和摘要工具，`my_agent/cloudflare_openai_model.py` 将函数声明转换成 `tools` / `tool_choice: auto` 请求，并把模型返回的 `tool_calls` 映射回 ADK function calls。
+- **语音输入** 当前使用 Android 系统语音识别，把语音转成可编辑文本后再进入 CareMind 工作流。本地 Gemma 音频转写暂时关闭，等待原生音频链路稳定。
+- APK 的模型列表来自 `GET /api/models`。Cloud Run 后端会动态扫描 Google Cloud Storage，所以新增端侧模型不需要重新打包 APK。
+- 模型文件应放在 Google Cloud Storage 或 Git LFS 中，不应作为普通 Git 文件提交。
 
-This split lets CareMind demonstrate both a practical cloud Agent workflow and a privacy-oriented on-device path for sensitive family-care data.
+这套设计让 CareMind 同时展示：
+
+```text
+云端 Agent：完整工作流、工具调用、复诊摘要
+端侧模式：敏感照护记录尽量留在手机本地处理
+```
 
 ### Native Function Calling / Tool Calling
 
-CareMind's C-track primary path is Edge AI on Android. Native Function Calling is demonstrated in the optional cloud Agent path, not in the offline LiteRT path.
+CareMind 的 C 赛道主线是 Android Edge AI。Native Function Calling / Tool Calling 展示在可选云端 Agent 路径中，而不是离线 LiteRT 路径中。
 
-The cloud root agent can call tools such as:
+云端 root agent 可以调用：
 
 - `run_cloud_care_workflow`
 - `extract_care_signals`
@@ -120,7 +136,7 @@ The cloud root agent can call tools such as:
 - `retrieve_recent_events`
 - `generate_doctor_summary`
 
-Minimal request:
+最小请求：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/chat/completions \
@@ -138,70 +154,66 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-## Edge AI Hardware Demo
+## Edge AI 硬件演示
 
-CareMind's Track C / Edge AI story is the Android privacy mode:
+CareMind 的 Track C / Edge AI 故事是 Android 隐私模式：
 
 ```text
-Care note on phone
--> Gemma 3 1B LiteRT model loaded on Android device
--> local care-note understanding and suggestion generation
--> no cloud model call for the sensitive note
+手机上的照护记录
+-> Android 加载 Gemma 3 1B LiteRT 模型
+-> 在本机做照护文本理解和建议生成
+-> 敏感记录不需要发送到云端模型
 ```
 
-### Demo Hardware
+### 真机演示步骤
 
-The hardware demo can be recorded on a real Android phone.
-
-Recommended recording checklist:
-
-1. Open CareMind on the Android device.
-2. Enter Settings / Privacy Mode.
-3. Show `Gemma 3 1B` as available or loaded.
-4. Turn off Wi-Fi and mobile data.
-5. Enter a care note such as:
+1. 在 Android 真机打开 CareMind。
+2. 进入 Settings / Privacy Mode。
+3. 展示 `Gemma 3 1B` 已可下载或已加载。
+4. 关闭 Wi-Fi 和移动数据。
+5. 输入：
 
 ```text
 外婆夜里醒了四次，一直说有人偷钱，晚饭只吃了几口，妈妈也很累。
 ```
 
-6. Show CareMind returning local, non-diagnostic care observations and lower-burden next actions.
+6. 展示 CareMind 在本机返回非诊断性照护观察和低负担下一步建议。
 
-Suggested video caption:
+建议视频字幕：
 
 ```text
 Network off. Gemma LiteRT runs on the Android device for local care-note understanding.
 ```
 
-### Model Distribution
+### 模型分发
 
-Preferred path for teammate testing:
+推荐给队友测试的方式：
 
 ```bash
 gcloud storage cp ./Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm gs://caremind-498713-models-asia/models/
 ```
 
-Then open the app:
+然后在 App 内：
 
 ```text
 Settings -> Privacy Mode -> 刷新 -> Download Gemma 3 1B
 ```
 
-The backend exposes a stable download path:
+后端提供稳定下载路径：
 
 ```http
 GET /api/models/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm
 ```
 
-On Cloud Run this returns a redirect to Google Cloud Storage, which avoids Cloud Run large-response limits for 500 MB+ artifacts.
+Cloud Run 会将大模型文件重定向到 Google Cloud Storage，避免 Cloud Run 直接返回 500 MB+ 文件带来的限制。
 
-Optional manual hardware-demo path:
+可选手动路径：
 
 ```bash
 adb push Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm /sdcard/Android/data/com.caremind.app/files/models/
 ```
 
-Current local model artifact:
+当前本地模型：
 
 ```text
 Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm
@@ -210,7 +222,7 @@ Runtime target: Android / Google AI Edge LiteRT
 Mode: optional privacy mode, not required for cloud mode
 ```
 
-If the model is stored in GitHub, it must be tracked with Git LFS:
+如需放入 GitHub，必须用 Git LFS：
 
 ```bash
 git lfs install
@@ -221,58 +233,52 @@ git commit -m "Add Gemma LiteRT model artifact via Git LFS"
 git push
 ```
 
-Normal Git should not be used for this file because GitHub rejects very large regular Git blobs.
+## 产品页面
 
-### Scope Boundary
-
-The Edge AI demo focuses on local text understanding and care suggestion generation. Voice input currently uses the Android system speech interface to convert speech into editable text before the model step.
-
-## Product Surface
-
-| Tab | Purpose | What the user does | What CareMind returns |
+| 页面 | 目标 | 用户输入 | 系统返回 |
 |---|---|---|---|
-| Today Care | Daily landing page | Checks today's state and marks actions as done / blocked | One or two attention cards, companion activity, caregiver check-in |
-| Smart Log | Main AI workflow | Writes or speaks what happened | Structured log, risk signals, communication script, memory candidates |
-| Follow-up Prep | Clinic preparation | Reviews recent records and uploaded / typed materials | 7d / 30d summary, doctor questions, copyable follow-up text |
+| 今日照护 | 每天打开后的落脚点 | 查看今日状态，标记行动为做到 / 做不到 / 稍后 | 今日关注卡、陪伴活动、照护者支持 |
+| 智能记录 | 核心 AI 工作流 | 输入或说出发生了什么 | 结构化日志、风险信号、沟通话术、Memory 候选 |
+| 复诊准备 | 医疗沟通辅助 | 选择 7 天 / 30 天，确认资料 | 复诊摘要、医生问题清单、可复制文字 |
 
-## Core Features
+## 核心功能
 
-- **Smart Log**: extracts sleep, behavior, medication, nutrition, safety, and caregiver-burden fields from natural language.
-- **Risk attention cards**: highlights non-diagnostic care risks such as night waking, door-opening, low intake, refusal, or caregiver overload.
-- **Action state loop**: tracks `pending / done / blocked` so the dashboard reflects what the caregiver could actually do.
-- **Communication scripts**: suggests lower-conflict responses for common dementia-care moments.
-- **Caregiver support**: recognizes fatigue and helps lower the day's care goal.
-- **Companion activities**: supports low-risk, non-medical activities such as photo recall, music, reading, or simple sorting.
-- **Document review**: lets families upload or type medical-adjacent summaries; only caregiver-reviewed items enter follow-up output.
-- **Memory-aware workflow**: preserves confirmed patterns, useful strategies, and reviewed materials.
-- **Safety guardrails**: redirects diagnosis, medication, imaging/test, and crisis requests into safer alternatives.
+- **智能记录**：从自然语言中抽取睡眠、行为、用药、饮食、安全和照护者压力字段。
+- **今日关注**：只突出今晚最值得关注的一两件事，避免把照护者推入更长清单。
+- **行动闭环**：支持 `pending / done / blocked`，照护者做不到时也给出替代建议。
+- **沟通话术**：为“有人偷钱”“我要回家”等常见场景生成低冲突回应。
+- **照护者支持**：识别疲惫、睡眠不足和高压力信号，提醒降低目标和寻求轮替。
+- **陪伴活动**：推荐照片、老歌、朗读、分类、轻手工等低风险非医疗活动。
+- **资料复诊**：上传或填写病历 / 检查 / 用药摘要，家属确认后进入复诊材料。
+- **Memory 工作流**：保存确认过的模式、有效安抚方式和复诊资料。
+- **安全边界**：把诊断、用药、检查决策和危机场景导向更安全的回复路径。
 
-## Tech Stack
+## 技术栈
 
-| Layer | Choice |
+| 层级 | 技术选择 |
 |---|---|
-| Frontend | Expo, React Native, Expo Router |
-| Mobile native | Android Kotlin bridge for Gemma model lifecycle and system speech recognition |
-| Backend | FastAPI |
-| Agent route | OpenAI-compatible `/v1/chat/completions` |
-| Business APIs | Typed `/api/*` endpoints |
-| Cloud model adapter | Cloudflare AI Gateway / OpenAI-compatible endpoint |
-| On-device model | Gemma 3 1B `.litertlm` via Android native module |
+| 前端 | Expo, React Native, Expo Router |
+| Android 原生 | Kotlin bridge for Gemma model lifecycle and system speech recognition |
+| 后端 | FastAPI |
+| Agent 路由 | OpenAI-compatible `/v1/chat/completions` |
+| 业务 API | Typed `/api/*` endpoints |
+| 云端模型适配 | Cloudflare AI Gateway / OpenAI-compatible endpoint |
+| 端侧模型 | Gemma 3 1B `.litertlm` via Android native module |
 | Memory | JSON-backed MVP memory store |
-| Documents | Local upload storage and caregiver review flow |
-| Model artifacts | Google Cloud Storage dynamic catalog, optional Git LFS |
-| Demo video | HTML canvas storyboard and locally rendered video assets |
+| 资料管理 | Local upload storage and caregiver review flow |
+| 模型分发 | Google Cloud Storage dynamic catalog, optional Git LFS |
+| Demo 视频 | HTML canvas storyboard and locally rendered video assets |
 
-## Quick Start
+## 快速启动
 
-### Requirements
+### 环境要求
 
 - Python 3.10+
 - Node.js 18+
 - npm
-- Optional: Cloudflare AI Gateway, OpenAI, or another OpenAI-compatible model endpoint
+- 可选：Cloudflare AI Gateway、OpenAI 或其他 OpenAI-compatible model endpoint
 
-### 1. Start The Backend
+### 1. 启动后端
 
 ```bash
 pip install -r requirements.txt
@@ -280,13 +286,13 @@ cp .env.example .env
 uvicorn main:app --host 127.0.0.1 --port 8090
 ```
 
-Check health:
+健康检查：
 
 ```bash
 curl http://127.0.0.1:8090/health
 ```
 
-### 2. Start The Frontend
+### 2. 启动前端
 
 ```bash
 cd frontend
@@ -294,13 +300,13 @@ npm install
 EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run web -- --port 8082
 ```
 
-Open:
+打开：
 
 ```text
 http://127.0.0.1:8082
 ```
 
-### 3. Run The First Care Workflow
+### 3. 跑通第一个照护工作流
 
 ```bash
 curl -X POST http://127.0.0.1:8090/api/care-workflow \
@@ -314,31 +320,39 @@ curl -X POST http://127.0.0.1:8090/api/care-workflow \
   }'
 ```
 
-## Configuration
+### Docker 启动
 
-Create `.env` from [.env.example](.env.example).
+```bash
+docker build -t caremind-backend .
+docker run --rm -p 8080:8080 --env-file .env caremind-backend
+curl http://127.0.0.1:8080/health
+```
 
-| Variable | Required | Purpose |
+## 配置
+
+从 [.env.example](.env.example) 创建 `.env`。
+
+| 变量 | 是否必需 | 用途 |
 |---|---:|---|
-| `CF_AIG_TOKEN` | yes, unless using another endpoint | Cloudflare AI Gateway credential |
-| `CF_AIG_BASE_URL` | yes, unless using `MODEL_BASE_URL` | OpenAI-compatible gateway URL |
-| `MODEL_NAME` | yes | Provider model identifier |
-| `MODEL_BASE_URL` | optional | Override model endpoint |
-| `MODEL_API_KEY` | optional | Provider API key when not using `CF_AIG_TOKEN` |
-| `TRANSCRIPTION_API_KEY` | optional for cloud STT | Speech transcription provider key; falls back to `OPENAI_API_KEY`, `MODEL_API_KEY`, or `CF_AIG_TOKEN` |
-| `TRANSCRIPTION_MODEL` | optional | Speech transcription model, default `gpt-4o-mini-transcribe` |
-| `TRANSCRIPTION_BASE_URL` | optional | OpenAI-compatible transcription endpoint, default `https://api.openai.com/v1` |
-| `CAREMIND_MODEL_DOWNLOAD_MODE` | optional | `proxy` or `stream`; local files are preferred, GCS proxy is used when configured |
-| `CAREMIND_REMOTE_MODEL_IDS` | optional | Comma-separated remote `.litertlm` model ids |
-| `CAREMIND_GCS_MODEL_BUCKET` | optional | Cloud Storage bucket used for dynamic on-device model catalog and downloads |
-| `CAREMIND_GCS_MODEL_PREFIX` | optional | Object prefix for model files, default `models`; every `.litertlm` / `.task` file under this prefix appears in `/api/models` |
-| `CAREMIND_GCS_DYNAMIC_CATALOG` | optional | `1` by default; when enabled, Cloud Run scans the GCS prefix so new models appear without rebuilding the APK |
-| `CAREMIND_GCS_MODEL_DELIVERY` | optional | `redirect` avoids Cloud Run large-response limits; `proxy` streams through backend |
-| `PROMPT_MODE` | optional | `WEAK` or `STRONG` prompt mode |
-| `PORT` | optional | Default `python main.py` port |
-| `DRUGBANK_API_KEY` | optional | External MCP drug knowledge source |
+| `CF_AIG_TOKEN` | 是，除非使用其他 endpoint | Cloudflare AI Gateway credential |
+| `CF_AIG_BASE_URL` | 是，除非使用 `MODEL_BASE_URL` | OpenAI-compatible gateway URL |
+| `MODEL_NAME` | 是 | Provider model identifier |
+| `MODEL_BASE_URL` | 可选 | Override model endpoint |
+| `MODEL_API_KEY` | 可选 | Provider API key when not using `CF_AIG_TOKEN` |
+| `TRANSCRIPTION_API_KEY` | 云端 STT 可选 | Speech transcription provider key; falls back to `OPENAI_API_KEY`, `MODEL_API_KEY`, or `CF_AIG_TOKEN` |
+| `TRANSCRIPTION_MODEL` | 可选 | Speech transcription model, default `gpt-4o-mini-transcribe` |
+| `TRANSCRIPTION_BASE_URL` | 可选 | OpenAI-compatible transcription endpoint, default `https://api.openai.com/v1` |
+| `CAREMIND_MODEL_DOWNLOAD_MODE` | 可选 | `proxy` or `stream`; local files are preferred, GCS proxy is used when configured |
+| `CAREMIND_REMOTE_MODEL_IDS` | 可选 | Comma-separated remote `.litertlm` model ids |
+| `CAREMIND_GCS_MODEL_BUCKET` | 可选 | Cloud Storage bucket used for dynamic on-device model catalog and downloads |
+| `CAREMIND_GCS_MODEL_PREFIX` | 可选 | Object prefix for model files, default `models` |
+| `CAREMIND_GCS_DYNAMIC_CATALOG` | 可选 | `1` by default; when enabled, Cloud Run scans the GCS prefix |
+| `CAREMIND_GCS_MODEL_DELIVERY` | 可选 | `redirect` avoids Cloud Run large-response limits; `proxy` streams through backend |
+| `PROMPT_MODE` | 可选 | `WEAK` or `STRONG` prompt mode |
+| `PORT` | 可选 | Default `python main.py` port |
+| `DRUGBANK_API_KEY` | 可选 | External MCP drug knowledge source |
 
-Minimal example:
+最小示例：
 
 ```env
 CF_AIG_TOKEN=your-cloudflare-ai-gateway-token
@@ -353,31 +367,31 @@ CAREMIND_GCS_DYNAMIC_CATALOG=1
 CAREMIND_GCS_MODEL_DELIVERY=redirect
 ```
 
-### Dynamic On-device Model Catalog
+### 动态端侧模型目录
 
-The Android APK does not hard-code the downloadable model list. It calls:
+Android APK 不硬编码模型下载列表，而是调用：
 
 ```http
 GET /api/models
 ```
 
-When `CAREMIND_GCS_MODEL_BUCKET` is configured, Cloud Run scans:
+当配置 `CAREMIND_GCS_MODEL_BUCKET` 后，Cloud Run 扫描：
 
 ```text
 gs://<CAREMIND_GCS_MODEL_BUCKET>/<CAREMIND_GCS_MODEL_PREFIX>/
 ```
 
-Every `.litertlm` or `.task` file directly under that prefix is returned to the app with a stable `/api/models/<filename>` download path. To add a new demo model:
+每个 `.litertlm` 或 `.task` 文件都会出现在 App 模型列表中，并生成稳定下载路径。新增模型：
 
 ```bash
 gcloud storage cp ./your-model.litertlm gs://caremind-498713-models-asia/models/
 ```
 
-Users can tap **刷新** in the privacy-mode model picker; the backend scans GCS dynamically, so the APK does not need to be rebuilt.
+用户在隐私模式模型选择器中点击 **刷新** 即可看到新模型，不需要重新打包 APK。
 
-## Android APK Notes
+## Android APK 说明
 
-For USB debugging, the Android app can use the laptop backend through `adb reverse`:
+USB 调试时，Android App 可以通过 `adb reverse` 访问电脑本地后端：
 
 ```bash
 adb reverse tcp:8090 tcp:8090
@@ -385,20 +399,20 @@ cd frontend
 npm run android:usb
 ```
 
-For a normal installed APK, build with a deployed HTTPS backend:
+正常安装包需要使用已部署的 HTTPS 后端：
 
 ```bash
 cd frontend
 EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
 ```
 
-Current demo backend:
+当前演示后端：
 
 ```text
 https://caremind-1039168666325.us-west1.run.app
 ```
 
-Example release build:
+示例 release build：
 
 ```bash
 cd frontend/android
@@ -407,19 +421,19 @@ EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app \
 ./gradlew :app:assembleRelease
 ```
 
-### On-device LLM output format
+### 端侧 LLM 输出格式
 
-Every local-inference task (SmartLog structuring, medical-boundary guardrail, follow-up summary) requires the small model to emit structured data. 1B–4B class on-device models are significantly more reliable with **XML tag output** than with strict JSON syntax. The output format is controlled by an environment variable:
+Smart Log structuring、medical-boundary guardrail、follow-up summary 等本地推理任务需要小模型输出结构化数据。1B-4B 端侧模型对 **XML tag output** 的稳定性通常高于严格 JSON，因此默认使用 XML。
 
-| Var | Default | Options |
+| 变量 | 默认 | 选项 |
 |---|---|---|
 | `EXPO_PUBLIC_LOCAL_OUTPUT_FORMAT` | `xml` | `xml` or `json` |
 
-The JSON path is retained as a rollback and for format A/B comparison. Both paths converge to the same normalisation and fallback logic; parsing failures in either format fall through to deterministic regex-based builders. See `frontend/lib/inference/local/format-config.ts` for details.
+JSON 路径保留为回滚和 A/B 测试选项。两个路径最终都会进入同一套 normalization 和 fallback 逻辑；解析失败时会回退到确定性的 regex builders。详见 [frontend/lib/inference/local/format-config.ts](frontend/lib/inference/local/format-config.ts)。
 
-If a release APK is built without `EXPO_PUBLIC_CAREMIND_API_URL`, CareMind fails closed with a clear configuration error instead of calling the phone's localhost.
+如果 release APK 构建时缺少 `EXPO_PUBLIC_CAREMIND_API_URL`，CareMind 会 fail closed，显示明确配置错误，而不是错误地访问手机本机 localhost。
 
-## API Examples
+## API 示例
 
 ### Guardrail Preflight
 
@@ -500,7 +514,7 @@ curl -X POST http://127.0.0.1:8090/v1/chat/completions \
   }'
 ```
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart TD
@@ -520,7 +534,7 @@ flowchart TD
     N --> O["Google Cloud Storage model artifacts"]
 ```
 
-Agent responsibilities:
+Agent 职责：
 
 ```text
 caremind_cloud_root_agent
@@ -531,7 +545,7 @@ caremind_cloud_root_agent
 └── doctor_summary_agent
 ```
 
-## Project Layout
+## 项目结构
 
 ```text
 .
@@ -555,48 +569,48 @@ caremind_cloud_root_agent
 └── Dockerfile
 ```
 
-## Documentation
+## 文档
 
 - Product PRD: [docs/PRD.md](docs/PRD.md)
 - Frontend guide: [frontend/README.md](frontend/README.md)
 - Demo recording guide: [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md)
 - Environment template: [.env.example](.env.example)
 
-## Safety Boundaries
+## 安全边界
 
-CareMind intentionally uses conservative language and workflow constraints:
+CareMind 坚持保守的医疗边界：
 
-- It does not diagnose dementia progression.
-- It does not suggest starting, stopping, changing, or replacing medication.
-- It does not decide whether MRI, CT, PET, blood tests, or cognitive scales are needed.
-- It does not claim that diet or activities treat, reverse, or improve cognitive decline.
-- Crisis inputs such as missing person, self-harm, harm to others, acute confusion, or serious injury are routed to urgent support guidance.
+- 不诊断失智症进展。
+- 不建议开始、停止、加减或更换药物。
+- 不判断是否需要 MRI、CT、PET、血液检查或认知量表。
+- 不宣称饮食或活动可以治疗、逆转或改善认知退化。
+- 对走失、自伤、伤人、急性意识改变、严重受伤等危机场景，转向紧急支持建议。
 
-Medical-adjacent document handling is limited to family record organization and follow-up communication. Imaging, scales, diagnosis, and medication conclusions must be judged by clinicians.
+病历、检查、用药等医疗相邻资料只用于家庭记录整理和复诊沟通。影像、量表、诊断和用药结论必须由医生判断。
 
-## Contributing
+## 贡献
 
-Contributions are welcome, especially:
+欢迎以下类型的贡献：
 
-- UX improvements that reduce caregiver cognitive load.
-- Safer medical-boundary wording.
-- Test cases for guardrails, document review, and follow-up summary generation.
-- Frontend accessibility fixes.
-- API contract improvements that preserve typed schemas.
+- 降低照护者认知负担的 UX 改进。
+- 更安全、更温和的医疗边界措辞。
+- Guardrail、资料复诊和摘要生成的测试用例。
+- 前端可访问性修复。
+- 保持 typed schema 的 API 合约改进。
 
-Before opening a pull request:
+提交 PR 前建议运行：
 
 ```bash
 cd frontend
 npm run typecheck
 ```
 
-Please include what changed, how it was tested, screenshots or a short recording for UI changes, and any safety-boundary impact.
+请在 PR 中说明改了什么、如何测试、UI 变更的截图或短录屏，以及是否影响医疗安全边界。
 
-## License
+## 许可证
 
-This project is released under the [MIT License](LICENSE).
+本项目采用 [MIT License](LICENSE)。
 
-## Acknowledgments
+## 致谢
 
-CareMind's safety framing is informed by public dementia care guidance and caregiver-support resources, including NICE dementia recommendations, Mayo Clinic diagnosis education, and Alzheimer's Association caregiver stress materials. These sources guide product boundaries; they do not make CareMind a medical device or clinical decision system.
+CareMind 的安全边界参考了公开失智症照护指南和照护者支持资料，包括 NICE dementia recommendations、Mayo Clinic diagnosis education 和 Alzheimer's Association caregiver stress materials。这些资料用于帮助产品保持边界清晰，不意味着 CareMind 是医疗器械或临床决策系统。
