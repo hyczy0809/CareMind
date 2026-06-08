@@ -45,7 +45,9 @@ CareMind Team: 张媛、连婕妤、刘畅、郭鸿宇
 ## Demo
 
 <p align="center">
-  <img src="docs/demo-video/generated/caremind-demo-video-preview.png" alt="CareMind demo video preview" width="860" />
+  <a href="https://www.bilibili.com/video/BV1hFEg6ZEVb">
+    <img src="docs/demo-video/generated/caremind-demo-video-preview.png" alt="CareMind demo video preview" width="860" />
+  </a>
 </p>
 
 Demo assets kept in Git:
