@@ -41,7 +41,7 @@ const FALLBACK_CATALOG: ModelCatalog = {
       id: "gemma-4-E2B-it.litertlm",
       filename: "gemma-4-E2B-it.litertlm",
       display_name: "Gemma 4 E2B",
-      description: "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
+      description: "中等多模态模型（~2.5 GB）。支持语音转写，建议 8 GB+ 内存设备，CPU 后端。",
       supports_audio: true,
       tier: "medium",
       size_bytes: 2588147712,

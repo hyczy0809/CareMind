@@ -10,10 +10,33 @@
 import { DeviceEventEmitter, NativeModules, Platform } from "react-native";
 import type { EmitterSubscription } from "react-native";
 
-export interface GemmaGenerateOptions {
+/**
+ * Hardware backend for MediaPipe LLM Inference.
+ *
+ * - `AUTO` (default) — the native side picks based on model size. Models over
+ *   ~1.5 GB on disk fall back to CPU because most phone GPUs cannot hold the
+ *   full weight tensor in VRAM and will OOM mid-graph. Smaller models go GPU.
+ * - `CPU` — force CPU. Slower but most reliable, often the only path that
+ *   works for ≥3 B parameter models on commodity Android.
+ * - `GPU` — force GPU (OpenCL delegate). Lowest latency on small models;
+ *   may fail to compile or run out of VRAM on larger ones.
+ */
+export type GemmaBackend = "AUTO" | "CPU" | "GPU";
+
+export interface GemmaEngineOptions {
+  /** Hardware backend override. Defaults to "AUTO". */
+  backend?: GemmaBackend;
+  /**
+   * Max tokens the engine keeps in its KV cache (prompt + generated).
+   * Lower values dramatically reduce native memory; default 2048.
+   * Try 1024 first when loading a 2 B model is OOM-ing.
+   */
+  maxTokens?: number;
+}
+
+export interface GemmaGenerateOptions extends GemmaEngineOptions {
   /** Filename of the model to use. Required for non-stub generation. */
   filename?: string;
-  maxTokens?: number;
   temperature?: number;
   topK?: number;
   requestId?: string;
@@ -38,7 +61,9 @@ interface CaremindGemmaSpec {
   downloadModel(filename: string, url: string): Promise<{ path: string; filename: string; bytes: number }>;
   cancelDownload(filename: string): Promise<void>;
   deleteModel(filename: string): Promise<void>;
-  initEngine(filename: string): Promise<void>;
+  initEngine(filename: string, options: GemmaEngineOptions | null): Promise<void>;
+  releaseEngine(): Promise<void>;
+  logMemorySnapshot(label: string | null): Promise<void>;
   generate(prompt: string, options: GemmaGenerateOptions): Promise<GemmaGenerateResult>;
   generateWithAudio(
     prompt: string,
@@ -85,8 +110,18 @@ export const Gemma = {
     return ensureNative().deleteModel(filename);
   },
 
-  initEngine(filename: string): Promise<void> {
-    return ensureNative().initEngine(filename);
+  initEngine(filename: string, options: GemmaEngineOptions = {}): Promise<void> {
+    return ensureNative().initEngine(filename, options);
+  },
+
+  releaseEngine(): Promise<void> {
+    if (!NativeCaremindGemma) return Promise.resolve();
+    return NativeCaremindGemma.releaseEngine();
+  },
+
+  logMemorySnapshot(label?: string): Promise<void> {
+    if (!NativeCaremindGemma) return Promise.resolve();
+    return NativeCaremindGemma.logMemorySnapshot(label ?? null);
   },
 
   generate(prompt: string, options: GemmaGenerateOptions = {}): Promise<GemmaGenerateResult> {
