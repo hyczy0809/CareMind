@@ -119,7 +119,7 @@ Edge AI 证据：
 - 模型目录：App 调用 `GET /api/models`，Cloud Run 动态扫描 Google Cloud Storage
 - 隐私路由：`frontend/lib/inference/inference-router.ts` 根据模式选择本地或云端
 - 离线演示：下载模型后可关闭 Wi-Fi / 移动网络，演示本地照护理解
-- iPhone 路线：当前走云端 Agent；后续通过 Swift Native Module 接入 iOS 本地模型，详见 [iPhone 端侧架构补充](docs/ios-edge-architecture.md)
+- iPhone 路线：当前 App 默认走云端 Agent；仓库已加入 iOS Swift Native Bridge，用于模型下载、校验、删除和 stub 本地推理，真实 LiteRT / MediaPipe iOS runtime 作为下一步接入，详见 [iPhone 端侧架构补充](docs/ios-edge-architecture.md)
 
 ### 模型使用说明
 
@@ -128,11 +128,11 @@ Edge AI 证据：
 | Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | 可演示 | 敏感照护记录本地理解与建议生成 |
 | Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | 已支持路径 / 实验性 | 通过动态模型目录支持，真机稳定性取决于设备内存 |
 | iPhone / iOS 云端版 | Cloud Run Agent workflow | 已支持 | 完整 App 体验、资料上传、录音上传转写 |
-| iPhone / iOS 端侧架构 | Swift Native Module + LiteRT / MediaPipe LLM | 架构已补充 | 面向 iPhone 用户的后续本地隐私推理路线 |
+| iPhone / iOS 端侧桥接 | Swift Native Module + stub local engine | 桥接已提交 / runtime 待接入 | 模型生命周期、下载校验、XML stub 输出和未来本地推理入口 |
 | 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 完整工作流、摘要、工具调用 |
 | 稳定性兜底 | deterministic parser / fallback builders | 已完成 | 保证 Demo 不因小模型输出不完整而中断 |
 
-不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。iPhone 端当前走云端 Agent；iPhone 本地推理属于已设计的下一阶段架构，不作为当前已完成离线演示能力声明。
+不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。iPhone 端当前默认走云端 Agent；iOS Native Bridge 已提交，但真实 iOS 本地大模型 runtime 尚未接入，不作为当前离线演示能力声明。
 
 ## 架构设计
 
@@ -142,9 +142,9 @@ flowchart TD
     B --> C["Android 端侧隐私模式"]
     C --> D["Gemma LiteRT 原生模块"]
     D --> E["本地结构化解析"]
-    B --> N["iPhone 云端版 / 端侧架构"]
-    N --> O["Swift Native Module 规划"]
-    O --> P["LiteRT / MediaPipe LLM Runtime"]
+    B --> N["iPhone 云端版 / 端侧桥接"]
+    N --> O["Swift Native Module"]
+    O --> P["Stub Engine / LiteRT Runtime 待接入"]
     P --> E
     B --> F["云端 Agent 模式"]
     F --> G["FastAPI 业务 API"]
@@ -161,8 +161,8 @@ iPhone 端侧补充架构：
 ```text
 iPhone 输入或录音
 -> 系统语音能力 / 手动输入转为可编辑文本
--> Inference Router 判断 iOS 本地模型是否可用
--> Swift Native Module 调用 Gemma-family 本地模型
+-> Inference Router 判断 iOS Native Bridge 是否可用
+-> Swift Native Module 管理模型下载、校验、删除和 stub 生成
 -> XML 结构化输出
 -> 复用现有 parser / fallback / guardrail
 -> 家属确认后进入复诊摘要或同步
@@ -260,7 +260,7 @@ eas build -p ios --profile preview
 
 ### iPhone / iOS 端侧架构预研
 
-当前 iPhone 端侧大模型推理尚未作为可演示能力声明。后续实现路线：
+当前 iPhone 端侧大模型推理尚未作为可演示能力声明；仓库里已经有 iOS Swift Native Bridge，可以管理模型文件并返回 stub XML 结果。后续实现路线：
 
 ```text
 Expo / React Native
@@ -271,7 +271,7 @@ Expo / React Native
 -> CareMind local care workflow
 ```
 
-验收标准包括：飞行模式下本地返回结构化照护整理、不开云端请求、低内存不闪退、输出不越过医疗边界。详细计划见 [docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)。
+现有代码入口：[frontend/modules/caremind-ios-gemma](frontend/modules/caremind-ios-gemma), [frontend/ios](frontend/ios)。验收标准包括：飞行模式下本地返回真实模型生成的结构化照护整理、不开云端请求、低内存不闪退、输出不越过医疗边界。详细计划见 [docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)。
 
 ### 本地后端 + 前端
 
@@ -337,8 +337,9 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 1. **Android 端侧隐私模式**
    代码：[frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma)
 
-2. **iPhone 云端 Agent 版与端侧架构**
+2. **iPhone 云端 Agent 版与端侧桥接**
    配置：[frontend/app.json](frontend/app.json), [frontend/eas.json](frontend/eas.json)
+   代码：[frontend/modules/caremind-ios-gemma](frontend/modules/caremind-ios-gemma), [frontend/ios](frontend/ios)
    设计：[docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)
 
 3. **本地 / 云端推理路由**
@@ -379,6 +380,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 | 录制指南 | [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md) |
 | iOS / EAS 构建配置 | [frontend/eas.json](frontend/eas.json) |
 | iPhone 端侧架构 | [docs/ios-edge-architecture.md](docs/ios-edge-architecture.md) |
+| iPhone Native Bridge | [frontend/modules/caremind-ios-gemma](frontend/modules/caremind-ios-gemma), [frontend/ios](frontend/ios) |
 | 后端入口 | [main.py](main.py) |
 | OpenAI-compatible Agent 路由 | [openai_compat.py](openai_compat.py) |
 | Agent / Memory 工作流 | [my_agent](my_agent) |
@@ -392,6 +394,8 @@ CareMind/
 ├── frontend/                       # Expo / React Native 前端
 │   ├── app/                        # Expo Router tabs
 │   ├── components/                 # Today, Smart Log, Follow-up, settings UI
+│   ├── ios/                        # iOS 原生工程
+│   ├── modules/caremind-ios-gemma/ # iOS Swift Native Bridge
 │   ├── lib/
 │   │   ├── inference/              # 云端 / 本地推理路由
 │   │   └── speech/                 # Android 系统语音桥接

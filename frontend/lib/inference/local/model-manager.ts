@@ -177,7 +177,7 @@ export async function downloadModel(filename: string): Promise<void> {
   try {
     const entry = await findModelById(filename);
     const url = entry ? resolveModelDownloadUrl(entry) : buildModelDownloadUrl(filename);
-    await Gemma.downloadModel(filename, url);
+    await Gemma.downloadModel(filename, url, entry?.checksum_sha256);
     patchEntry(filename, { status: "ready", progress: 1 });
   } catch (error) {
     patchEntry(filename, {
@@ -272,7 +272,7 @@ export async function resolveSelectedModelFilename(): Promise<string | null> {
  */
 export async function ensureEngine(options: GemmaEngineOptions = {}): Promise<string> {
   if (!GEMMA_NATIVE_AVAILABLE) {
-    throw new Error("当前平台不支持本地推理（仅 Android 真机）。");
+    throw new Error("当前平台不支持 CareMind 本地推理。");
   }
   const filename = await resolveSelectedModelFilename();
   if (!filename) {

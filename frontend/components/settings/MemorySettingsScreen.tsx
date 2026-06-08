@@ -36,6 +36,8 @@ function eventLabel(name: AnalyticsEvent["name"]) {
     activity_stopped: "提前停止活动",
     activity_feedback_saved: "保存活动反馈",
     activity_memory_candidate_created: "生成活动记忆候选",
+    care_log_ai_parse_succeeded: "AI 整理照护记录成功",
+    care_log_ai_parse_failed: "AI 整理照护记录失败",
     care_log_saved: "保存照护记录",
     action_status_changed: "更新行动状态",
     caregiver_checkin_saved: "保存照护者状态",

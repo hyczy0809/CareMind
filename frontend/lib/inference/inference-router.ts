@@ -1,7 +1,8 @@
 // The single place that knows both cloud and local exist. Every dispatch
-// reads the privacy-mode flag and the model status; on local failure or
-// missing model we silently fall back to cloud (degraded mode), and the
-// settings UI shows a banner so the user knows.
+// reads the privacy-mode flag and the model status. When privacy mode is on,
+// missing local capability must not silently upload sensitive notes to cloud;
+// call sites can catch the explicit local-unavailable error and show a local
+// deterministic fallback or ask the user to opt into cloud for this request.
 //
 // Call sites (SmartLogScreen, FollowupPrepScreen, store) import these
 // functions from lib/care-workflow-api.ts and remain unaware of the split.
@@ -35,29 +36,23 @@ import { checkGuardrailLocal } from "./local/guardrail-local";
 import { generateFollowupSummaryLocal } from "./local/followup-local";
 import { transcribeAudioNoteLocal } from "./local/audio-local";
 
-/** True when privacy mode is on AND the currently selected on-device model
- *  is ready to serve. */
-async function shouldUseLocal(): Promise<boolean> {
-  if (!(await isPrivacyMode())) return false;
+/** True when the currently selected on-device model is ready to serve. */
+async function isSelectedLocalModelReady(): Promise<boolean> {
   const filename = await resolveSelectedModelFilename();
   if (!filename) return false;
   return getModelEntry(filename).status === "ready";
 }
 
-async function withLocalFallback<T>(local: () => Promise<T>, cloud: () => Promise<T>): Promise<T> {
-  try {
-    return await local();
-  } catch (error) {
-    console.warn("[router] local inference failed, falling back to cloud", error);
-    return cloud();
-  }
+function localUnavailableError(): Error {
+  return new Error("隐私模式已开启，但本机模型尚未就绪。请先在设置里下载本地模型，或明确关闭隐私模式后使用云端整理。");
 }
 
 export async function runCareWorkflow(
   request: CareWorkflowRequest
 ): Promise<CareWorkflowAppResult> {
-  if (await shouldUseLocal()) {
-    return withLocalFallback(() => runCareWorkflowLocal(request), () => runCareWorkflowCloud(request));
+  if (await isPrivacyMode()) {
+    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
+    return runCareWorkflowLocal(request);
   }
   return runCareWorkflowCloud(request);
 }
@@ -65,8 +60,9 @@ export async function runCareWorkflow(
 export async function checkGuardrail(
   request: GuardrailCheckRequest
 ): Promise<GuardrailCheckResponse> {
-  if (await shouldUseLocal()) {
-    return withLocalFallback(() => checkGuardrailLocal(request), () => checkGuardrailCloud(request));
+  if (await isPrivacyMode()) {
+    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
+    return checkGuardrailLocal(request);
   }
   return checkGuardrailCloud(request);
 }
@@ -74,11 +70,9 @@ export async function checkGuardrail(
 export async function generateFollowupSummary(
   input: FollowupSummaryInput
 ): Promise<FollowupSummaryResponse> {
-  if (await shouldUseLocal()) {
-    return withLocalFallback(
-      () => generateFollowupSummaryLocal(input),
-      () => generateFollowupSummaryCloud(input)
-    );
+  if (await isPrivacyMode()) {
+    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
+    return generateFollowupSummaryLocal(input);
   }
   return generateFollowupSummaryCloud(input);
 }
@@ -86,7 +80,8 @@ export async function generateFollowupSummary(
 export async function transcribeAudioNote(
   input: TranscribeAudioNoteInput
 ): Promise<AudioTranscriptionResponse> {
-  if (await shouldUseLocal()) {
+  if (await isPrivacyMode()) {
+    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
     // For audio we do NOT silently fall back: uploading user audio to the
     // backend after a "privacy mode" toggle would be a privacy violation. If
     // the local engine fails, surface the error so the recorder UI can show

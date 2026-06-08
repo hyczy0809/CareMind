@@ -1,0 +1,7 @@
+{
+  "name": "caremind-ios-gemma",
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["CaremindGemmaModule"]
+  }
+}

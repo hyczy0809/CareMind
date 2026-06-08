@@ -50,6 +50,8 @@ export type AnalyticsEventName =
   | "activity_stopped"
   | "activity_feedback_saved"
   | "activity_memory_candidate_created"
+  | "care_log_ai_parse_succeeded"
+  | "care_log_ai_parse_failed"
   | "care_log_saved"
   | "action_status_changed"
   | "caregiver_checkin_saved"

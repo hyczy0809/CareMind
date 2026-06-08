@@ -14,7 +14,7 @@ import {
   X
 } from "lucide-react-native";
 import { useCareMind } from "../../lib/caremind-store";
-import { transcribeAudioNote } from "../../lib/care-workflow-api";
+import { runCareWorkflow, transcribeAudioNote } from "../../lib/care-workflow-api";
 import { isPrivacyMode } from "../../lib/inference/privacy-mode";
 import { selectionHaptic, successHaptic } from "../../lib/safe-haptics";
 import {
@@ -27,7 +27,7 @@ import {
   subscribeAndroidSpeechResult
 } from "../../lib/speech/android-speech";
 import { colors, hitSlop, shadow, typography } from "../../lib/theme";
-import type { AnalyticsEvent, MemoryItem, StructuredLog } from "../../types/caremind";
+import type { AnalyticsEvent, AttentionItem, MemoryItem, StructuredLog } from "../../types/caremind";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { PageHeader } from "../ui/PageHeader";
@@ -970,6 +970,9 @@ export function SmartLogScreen() {
   const [eventAt, setEventAt] = useState(new Date().toISOString());
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedLog, setParsedLog] = useState<StructuredLog | null>(null);
+  const [workflowAttentionItems, setWorkflowAttentionItems] = useState<AttentionItem[]>([]);
+  const [workflowMemoryItems, setWorkflowMemoryItems] = useState<MemoryItem[]>([]);
+  const [workflowScriptAdvice, setWorkflowScriptAdvice] = useState<ScriptAdvice | null>(null);
   const [candidate, setCandidate] = useState<MemoryItem | null>(null);
   const [completedSteps, setCompletedSteps] = useState(0);
   const [inputError, setInputError] = useState<string | null>(null);
@@ -977,7 +980,7 @@ export function SmartLogScreen() {
   const [toast, setToast] = useState<string | null>(null);
   const headerDateTime = useMemo(() => formatHeaderDateTime(), []);
   const similarMemory = useMemo(() => memoryItems.find((item) => item.status === "confirmed"), [memoryItems]);
-  const scriptAdvice = parsedLog ? buildScriptAdvice(value, parsedLog) : null;
+  const scriptAdvice = workflowScriptAdvice ?? (parsedLog ? buildScriptAdvice(value, parsedLog) : null);
   const showBoundary = !boundaryDismissed && medicalKeywords.test(value);
 
   function showToast(text: string) {
@@ -1001,14 +1004,48 @@ export function SmartLogScreen() {
       setCompletedSteps(index);
     }
 
-    setParsedLog(previewStructuredLog(value));
-    setCandidate(previewMemoryCandidate(value));
+    try {
+      const result = await runCareWorkflow({
+        patient_id: patient.id,
+        caregiver_id: "local_caregiver",
+        note: value.trim(),
+        source: "manual",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "Asia/Shanghai"
+      });
+      const structured = result.structuredLog ?? previewStructuredLog(value);
+      setParsedLog(structured);
+      setWorkflowAttentionItems(result.attentionItems);
+      setWorkflowMemoryItems(result.memoryItems);
+      setWorkflowScriptAdvice(result.scriptAdvice);
+      setCandidate(result.memoryItems[0] ?? previewMemoryCandidate(value));
+      trackEvent("care_log_ai_parse_succeeded", {
+        platform: Platform.OS,
+        attention_count: result.attentionItems.length,
+        memory_candidate_count: result.memoryItems.length
+      });
+    } catch (error) {
+      console.warn("CareMind workflow parse failed, using local preview", error);
+      const fallbackMemory = previewMemoryCandidate(value);
+      setParsedLog(previewStructuredLog(value));
+      setWorkflowAttentionItems([]);
+      setWorkflowMemoryItems(fallbackMemory ? [fallbackMemory] : []);
+      setWorkflowScriptAdvice(null);
+      setCandidate(fallbackMemory);
+      trackEvent("care_log_ai_parse_failed", {
+        platform: Platform.OS,
+        reason: error instanceof Error ? error.message : "unknown"
+      });
+    }
     setParseState("parsed");
   }
 
   async function save() {
     if (!parsedLog) return;
-    saveLog(value, parsedLog, { occurredAt: eventAt });
+    saveLog(value, parsedLog, {
+      occurredAt: eventAt,
+      attentionItems: workflowAttentionItems.length > 0 ? workflowAttentionItems : undefined,
+      memoryItems: workflowMemoryItems.length > 0 ? workflowMemoryItems : undefined
+    });
     setParseState("saved");
     await successHaptic();
     showToast(recordCount === 0 ? `你帮 ${patient.nickname} 记录了第一个重要信息。` : "已保存，复诊摘要会同步更新。");
@@ -1017,6 +1054,9 @@ export function SmartLogScreen() {
   function resetInput() {
     setValue("");
     setParsedLog(null);
+    setWorkflowAttentionItems([]);
+    setWorkflowMemoryItems([]);
+    setWorkflowScriptAdvice(null);
     setCandidate(null);
     setCompletedSteps(0);
     setInputError(null);

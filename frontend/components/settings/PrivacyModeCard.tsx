@@ -81,6 +81,10 @@ export function PrivacyModeCard() {
   const localInferenceAvailable = GEMMA_NATIVE_AVAILABLE;
   const visiblePrivacyOn = localInferenceAvailable ? privacyOn : false;
   const unsupportedPlatformLabel = Platform.OS === "ios" ? "iPhone" : Platform.OS === "web" ? "Web" : "当前平台";
+  const localSubtitle =
+    Platform.OS === "ios"
+      ? "开启后优先使用 iPhone 本地模型处理文字照护记录；当前 iOS 先跑通本地 XML stub，语音暂不走本地模型。"
+      : "开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。";
 
   useEffect(() => subscribeManager(setManager), []);
 
@@ -119,8 +123,8 @@ export function PrivacyModeCard() {
           <Text style={styles.title}>隐私模式</Text>
           <Text style={styles.subtitle}>
             {localInferenceAvailable
-              ? "开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。"
-              : `${unsupportedPlatformLabel} 端支持完整 App 与云端 Agent 工作流；本地 Gemma 推理目前仅 Android 真机可用。`}
+              ? localSubtitle
+              : `${unsupportedPlatformLabel} 端支持完整 App 与云端 Agent 工作流；本地推理需要安装包含 CareMind Native Module 的开发包或真机包。`}
           </Text>
         </View>
         <Switch
@@ -138,14 +142,14 @@ export function PrivacyModeCard() {
       {showBanner ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>
-            当前选中的模型尚未就绪，文字请求可能回退到云端。若要离线演示，请下载并选择 Gemma 3 1B；语音暂不走本地模型。
+            当前选中的模型尚未就绪。隐私模式下文字请求不会自动上传云端；请先下载并选择本地模型，或关闭隐私模式后使用云端整理。
           </Text>
         </View>
       ) : null}
 
       {!GEMMA_NATIVE_AVAILABLE ? (
         <Text style={styles.helper}>
-          {unsupportedPlatformLabel} 端可以使用智能记录、今日照护、复诊准备、资料上传和语音录音上传转写；端侧 Gemma LiteRT 隐私模式目前保留给 Android 真机演示。
+          {unsupportedPlatformLabel} 端可以使用智能记录、今日照护、复诊准备、资料上传和语音录音上传转写；如需端侧隐私模式，请使用包含 CareMind iOS/Android Native Module 的构建包。
         </Text>
       ) : (
         <>

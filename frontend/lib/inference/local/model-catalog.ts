@@ -5,6 +5,7 @@
 
 import { buildModelCatalogUrl } from "./constants";
 import { buildApiUrl } from "../shared/http";
+import { Platform } from "react-native";
 
 export interface ModelCatalogEntry {
   /** Stable identifier == the filename. */
@@ -21,6 +22,14 @@ export interface ModelCatalogEntry {
   size_bytes: number;
   /** "litertlm" | "task". */
   format: string;
+  /** Supported platforms. Older backend entries may omit this and are treated as Android-only. */
+  platforms?: Array<"android" | "ios" | "web">;
+  /** Native runtime expected for this model. */
+  runtime?: "mediapipe-llm" | "litert" | "litert-lm" | "ios-swift-stub" | "stub";
+  checksum_sha256?: string;
+  min_ios?: string;
+  min_device_memory_gb?: number;
+  recommended?: boolean;
   /** Server-side download path, e.g. "/api/models/foo.litertlm". */
   download_path: string;
   modified_at: string;
@@ -34,7 +43,7 @@ export interface ModelCatalog {
 let cache: ModelCatalog | null = null;
 let cacheTime = 0;
 const CACHE_TTL_MS = 60_000;
-const FALLBACK_CATALOG: ModelCatalog = {
+const ANDROID_FALLBACK_CATALOG: ModelCatalog = {
   model_dir: "builtin",
   models: [
     {
@@ -46,11 +55,55 @@ const FALLBACK_CATALOG: ModelCatalog = {
       tier: "light",
       size_bytes: 584417280,
       format: "litertlm",
+      platforms: ["android"],
+      runtime: "mediapipe-llm",
+      recommended: true,
       download_path: "/api/models/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
       modified_at: "fallback"
     }
   ]
 };
+
+const IOS_FALLBACK_CATALOG: ModelCatalog = {
+  model_dir: "builtin-ios",
+  models: [
+    {
+      id: "caremind-ios-local-stub.model",
+      filename: "caremind-ios-local-stub.model",
+      display_name: "CareMind iOS Local Stub",
+      description: "iPhone 端侧推理桥接模型（开发版）。用于飞行模式跑通本机 XML 输出；后续可替换为 LiteRT iOS 兼容模型。",
+      supports_audio: false,
+      tier: "light",
+      size_bytes: 1,
+      format: "stub",
+      platforms: ["ios"],
+      runtime: "ios-swift-stub",
+      recommended: true,
+      download_path: "/api/models/caremind-ios-local-stub.model",
+      modified_at: "fallback"
+    }
+  ]
+};
+
+function fallbackCatalogForCurrentPlatform(): ModelCatalog {
+  return Platform.OS === "ios" ? IOS_FALLBACK_CATALOG : ANDROID_FALLBACK_CATALOG;
+}
+
+function supportsCurrentPlatform(entry: ModelCatalogEntry): boolean {
+  if (Platform.OS === "ios") {
+    return entry.platforms?.includes("ios") ?? false;
+  }
+  if (Platform.OS === "android") {
+    return entry.platforms?.includes("android") ?? !entry.platforms;
+  }
+  return entry.platforms?.includes("web") ?? false;
+}
+
+function withPlatformFallback(models: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  const supported = models.filter(supportsCurrentPlatform);
+  if (supported.length > 0) return supported;
+  return fallbackCatalogForCurrentPlatform().models;
+}
 
 /** Fetch the model catalog from the backend. Cached for ~60 s. */
 export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
@@ -69,7 +122,7 @@ export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
     const payload = (await response.json()) as ModelCatalog;
     const models = Array.isArray(payload.models) ? payload.models : [];
     cache = {
-      models: models.length > 0 ? models : FALLBACK_CATALOG.models,
+      models: models.length > 0 ? withPlatformFallback(models) : fallbackCatalogForCurrentPlatform().models,
       model_dir: payload.model_dir ?? ""
     };
     cacheTime = Date.now();
@@ -77,7 +130,7 @@ export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
   } catch (error) {
     if (cache) return cache; // Stale-but-usable on network errors.
     console.warn("[model-catalog] using fallback catalog", error);
-    cache = FALLBACK_CATALOG;
+    cache = fallbackCatalogForCurrentPlatform();
     cacheTime = Date.now();
     return cache;
   } finally {
