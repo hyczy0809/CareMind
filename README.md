@@ -63,11 +63,9 @@ curl https://caremind-1039168666325.us-west1.run.app/health
 curl https://caremind-1039168666325.us-west1.run.app/api/models
 ```
 
-说明：CareMind 的主要演示形态是 Android 真机 App 与本地 Web 开发预览。公开地址目前提供后端 API、模型目录和 Agent 接口；完整前端可按第 6 节在本地启动，或通过 Android APK 连接该后端。
+说明：CareMind 的主要演示形态是 Android 真机 App 与本地 Web 开发预览。公开地址目前提供后端 API、模型目录和 Agent 接口；完整前端可按第 5 节在本地启动，或通过 Android APK 连接该后端。
 
-## 4. 演示视频链接
-
-公开视频：
+演示视频：
 
 <https://www.bilibili.com/video/BV1hFEg6ZEVb>
 
@@ -85,7 +83,7 @@ curl https://caremind-1039168666325.us-west1.run.app/api/models
 
 视频文件不提交到 Git 历史中，README 使用可点击封面图链接到公开视频。
 
-## 5. 项目仓库链接
+## 4. 项目仓库链接
 
 GitHub 仓库：
 
@@ -95,7 +93,7 @@ GitHub 仓库：
 
 <https://github.com/gdgshanghai/Gemma4-Hackathon-ShangHai/pull/57>
 
-## 6. 运行方式
+## 5. 运行方式
 
 ### 方式一 · 本地 Web 前端预览
 
@@ -226,7 +224,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 
 真实 API Key 只应写入本地 `.env`，不要提交到公开仓库。
 
-## 7. 技术栈
+## 6. 技术栈
 
 前端：
 
@@ -258,7 +256,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 - Docker / local uvicorn
 - Android release APK
 
-## 8. 项目亮点
+## 7. 项目亮点
 
 **Edge AI 是产品需求，不是装饰性技术点。**
 失智症照护记录常常包含家庭冲突、患者状态、照护者崩溃时刻等敏感内容。CareMind 的隐私模式支持在 Android 真机加载 Gemma LiteRT 模型，让更敏感的照护记录优先留在本机处理。
@@ -278,7 +276,7 @@ CareMind 把模型输出转成 typed product data：结构化日志、今日关�
 **演示数据脱敏，真实部署可控。**
 默认使用脱敏演示数据；API Key 通过 `.env` 注入；大模型文件通过 GCS 或 Git LFS 管理，不进入普通 Git 历史。
 
-## 9. 交付物说明
+## 8. 交付物说明
 
 | 交付物 | 位置 / 链接 |
 |---|---|
