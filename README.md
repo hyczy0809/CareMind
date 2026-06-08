@@ -10,12 +10,15 @@
 
 当前运行形态：
 
-- **Android 端侧隐私模式**：已支持 Gemma LiteRT 端侧演示，敏感照护记录可优先在本机处理。
-- **iPhone 云端 Agent 版**：已支持完整 App 与云端 Agent 工作流。
-- **iPhone 端侧隐私模式**：已部署首版 iOS Swift Native Bridge + llama.cpp，可做 GGUF 模型下载、校验、删除和端侧 XML 输出；当前为 CPU / Accelerate 路径，后续继续做 Metal 与更大模型压测。
-- **云端 Agent 后端**：已部署到 Google Cloud Run，提供照护工作流、复诊摘要、资料上传和模型目录接口。
+| 运行形态 | 当前状态 | 验证重点 |
+|---|---|---|
+| Android 端侧隐私模式 | 已支持 Gemma LiteRT 端侧演示 | 敏感文字记录可优先在本机处理 |
+| iPhone 云端 Agent 版 | 已支持完整 App 与云端 Agent 工作流 | 智能记录、今日照护、资料上传和复诊准备 |
+| iPhone 端侧隐私模式 | 已部署首版 Swift Native Bridge + llama.cpp | GGUF 模型下载、校验、删除和端侧 XML 输出 |
+| 云端 Agent 后端 | 已部署到 Google Cloud Run | 照护工作流、复诊摘要、资料上传和模型目录 |
 
-安全边界：CareMind 不是医疗器械，不诊断、不处方、不判断检查、不替代医生或急救服务。它只帮助家庭整理照护观察，并准备复诊沟通材料。
+> **安全边界**
+> CareMind 不是医疗器械，不诊断、不处方、不判断检查、不替代医生或急救服务。它只帮助家庭整理照护观察，并准备复诊沟通材料。
 
 ## 2. 项目简介
 
@@ -23,23 +26,23 @@
 
 CareMind 做的是一条家庭照护闭环：
 
-```text
-零散照护记录
--> 结构化照护日志
--> 今日关注事项
--> 低负担行动建议
--> 低冲突沟通话术
--> 照护者支持
--> 近 7 天 / 30 天复诊摘要
--> 隐私优先的端侧处理
-```
+| 家属遇到的问题 | CareMind 的输出 |
+|---|---|
+| 零散记录说不清 | 结构化照护日志 |
+| 不知道今天先做什么 | 今日关注事项和低负担行动 |
+| 沟通容易起冲突 | 低冲突沟通话术 |
+| 复诊前信息混乱 | 近 7 天 / 30 天复诊摘要 |
+| 照护者压力过高 | 照护者支持和求助提醒 |
+| 记录过于私密 | Android / iPhone 端侧隐私模式 |
 
 核心页面：
 
-- **今日照护**：展示今天值得留意的事、行动三态、陪伴活动和照护者支持。
-- **智能记录**：输入或语音记录照护事件，生成结构化日志、家庭观察信号和沟通话术。
-- **复诊准备**：聚合近 7 天 / 30 天记录、病历/检查/用药资料，生成可复制复诊摘要。
-- **隐私模式**：在端侧模型就绪时，优先使用本机模型处理敏感文字记录。
+| 页面 | 主要内容 |
+|---|---|
+| 今日照护 | 今天值得留意的事、行动三态、陪伴活动和照护者支持 |
+| 智能记录 | 输入或语音记录照护事件，生成结构化日志、家庭观察信号和沟通话术 |
+| 复诊准备 | 聚合近 7 天 / 30 天记录、病历/检查/用药资料，生成可复制复诊摘要 |
+| 隐私模式 | 端侧模型就绪时，优先使用本机模型处理敏感文字记录 |
 
 CareMind 的重点不是“AI 总结文本”，而是让照护者在混乱和疲惫时，知道今天先做什么、复诊该说什么，也知道哪些信息应该先留在自己手机里。
 
@@ -55,34 +58,16 @@ CareMind 的重点不是“AI 总结文本”，而是让照护者在混乱和�
   </a>
 </p>
 
-Cloud Run 后端：
+演示入口：
 
-<https://caremind-1039168666325.us-west1.run.app>
+| 入口 | 适合查看 | 重点 |
+|---|---|---|
+| 演示视频 | 快速了解产品故事和完整闭环 | 从家庭照护记录到今日行动、沟通话术、复诊准备 |
+| Android 端侧演示 | 验证 C 赛道 Edge AI 能力 | Gemma LiteRT 本机处理敏感文字记录 |
+| iPhone 端侧演示 | 验证 iOS 隐私模式首版 | GGUF 模型下载、校验和 llama.cpp 本机 XML 输出 |
+| iPhone 云端版 | 验证完整 App 体验 | 智能记录、今日照护、复诊准备、资料上传和录音转写 |
 
-后端冒烟测试：
-
-```bash
-curl https://caremind-1039168666325.us-west1.run.app/health
-curl https://caremind-1039168666325.us-west1.run.app/api/models
-```
-
-完整工作流测试：
-
-```bash
-curl -X POST https://caremind-1039168666325.us-west1.run.app/api/care-workflow \
-  -H "Content-Type: application/json" \
-  -d '{
-    "patient_id": "demo_patient",
-    "caregiver_id": "demo_caregiver",
-    "note": "外婆夜里醒了四次，一直说有人偷钱，晚饭只吃了几口，妈妈也很累。",
-    "source": "judge_demo",
-    "timezone": "Asia/Shanghai"
-  }'
-```
-
-预期可以看到结构化照护字段、今日关注事项、照护沟通建议和非诊断性下一步提示。
-
-Android 端侧演示路径：
+Android 端侧路径：
 
 ```text
 Android App
@@ -94,15 +79,15 @@ Android App
 -> 本机生成非诊断性照护理解与建议
 ```
 
-iPhone 端验证路径：
+iPhone 云端版路径：
 
 ```text
 iPhone / iOS Simulator
--> Cloud Run 后端
+-> 已部署云端服务
 -> 智能记录、今日照护、复诊准备、资料上传、录音上传转写
 ```
 
-iPhone 端侧验证路径：
+iPhone 端侧路径：
 
 ```text
 iPhone App
@@ -322,23 +307,14 @@ POST /v1/chat/completions
 
 ## 8. 项目亮点
 
-1. **失智症家庭照护专用 Agent，不是通用聊天机器人**
-   CareMind 围绕照护日志、今日关注、沟通话术、复诊摘要和照护者压力支持组织输出。
-
-2. **端侧隐私是产品需求，不是装饰性技术点**
-   失智症照护记录常常包含家庭压力、患者状态和照护者崩溃时刻。Android 与 iPhone 隐私模式都让敏感文字记录可以优先在本机完成初步理解。
-
-3. **云端多 Agent + Memory 工作流**
-   6 个显式 ADK Agent 负责事件结构化、非诊断性关注提示、照护者支持、行动计划和复诊摘要。Memory Router 会调取患者画像、近期事件、行为基线和用药记录。
-
-4. **完整前端 UI 已提交**
-   `frontend/app` 和 `frontend/components` 包含今日照护、智能记录、复诊准备、设置页、Memory 提示、资料上传和隐私模式 UI。
-
-5. **Android 与 iPhone 路线都保留**
-   Android 用于 C 赛道端侧硬件演示；iPhone 端同时支持云端 Agent 与 llama.cpp 端侧隐私模式，便于覆盖更多真实照护者设备。
-
-6. **医疗边界前置**
-   系统不诊断、不处方、不判断检查。复诊摘要和资料进入报告前需要家属确认。
+| 亮点 | 说明 |
+|---|---|
+| 失智症家庭照护专用 Agent | 围绕照护日志、今日关注、沟通话术、复诊摘要和照护者压力支持组织输出 |
+| Edge AI 来自真实隐私需求 | Android 与 iPhone 隐私模式都让敏感文字记录可以优先在本机完成初步理解 |
+| 云端多 Agent + Memory 工作流 | 6 个显式 ADK Agent 负责事件结构化、非诊断性关注提示、照护者支持、行动计划和复诊摘要 |
+| 完整前端 UI 已提交 | `frontend/app` 和 `frontend/components` 包含今日照护、智能记录、复诊准备、设置页、资料上传和隐私模式 UI |
+| Android 与 iPhone 路线都保留 | Android 用于 C 赛道端侧硬件演示；iPhone 端同时支持云端 Agent 与 llama.cpp 端侧隐私模式 |
+| 医疗边界前置 | 不诊断、不处方、不判断检查；复诊摘要和资料进入报告前需要家属确认 |
 
 ## 9. 交付物说明
 
@@ -348,7 +324,6 @@ POST /v1/chat/completions
 | 比赛 fork 提交目录 | <https://github.com/whitesungun876/Gemma4-Hackathon-ShangHai/tree/main/submissions/2026/track_C/CareMind> |
 | 官方 PR | <https://github.com/gdgshanghai/Gemma4-Hackathon-ShangHai/pull/64> |
 | 演示视频 | <https://www.bilibili.com/video/BV1hFEg6ZEVb> |
-| Cloud Run 后端 | <https://caremind-1039168666325.us-west1.run.app> |
 | PRD | `docs/PRD.md` |
 | 前端说明 | `frontend/README.md` |
 | iPhone 端侧架构 | `docs/ios-edge-architecture.md` |
