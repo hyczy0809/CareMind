@@ -46,6 +46,7 @@ It is built for family caregivers, not clinicians. CareMind does not diagnose, p
 
 Demo assets kept in Git:
 
+- Public demo video: [Bilibili BV1hFEg6ZEVb](https://www.bilibili.com/video/BV1hFEg6ZEVb)
 - Preview image: [docs/demo-video/generated/caremind-demo-video-preview.png](docs/demo-video/generated/caremind-demo-video-preview.png)
 - Storyboard: [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md)
 - Recording guide: [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md)
