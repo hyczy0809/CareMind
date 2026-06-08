@@ -10,7 +10,7 @@
 
 ## 评委速览
 
-CareMind 是一个面向失智症家庭照护者的 AI Care Agent。它把家属零散的照护记录整理成结构化日志、今日行动、沟通话术、照护者支持和复诊摘要。当前 iPhone 端支持完整 App 与云端 Agent 工作流；C 赛道核心演示聚焦 Android 端侧 Gemma LiteRT，让敏感记录优先留在本机处理。
+CareMind 是一个面向失智症家庭照护者的 AI Care Agent。它把家属零散的照护记录整理成结构化日志、今日行动、沟通话术、照护者支持和复诊摘要。当前 iPhone 端支持完整 App 与云端 Agent 工作流，并已补充 iPhone 端侧架构；C 赛道核心演示聚焦 Android 端侧 Gemma LiteRT，让敏感记录优先留在本机处理。
 
 为什么是 C 赛道：失智症照护里最敏感的信息常常发生在家里和深夜，包括患者状态、家庭压力、用药观察和照护者崩溃时刻。CareMind 的核心 Edge AI 价值是：这些记录不应默认全部上传云端，而应支持在 Android 设备上优先本地理解。
 
@@ -64,6 +64,12 @@ Android App -> 设置 / 隐私模式 -> 刷新模型目录 -> 下载 Gemma LiteR
 iPhone / iOS Simulator -> Cloud Run 后端 -> 智能记录、今日照护、复诊准备、资料上传、录音上传转写
 ```
 
+**iPhone 端侧架构**
+
+```text
+iPhone App -> Inference Router -> iOS Native Module 规划 -> Gemma-family 本地文本理解 -> 家属确认后同步
+```
+
 ## 为什么做 CareMind
 
 失智症家庭照护的难点不是只发生在诊室里。家属每天要记住夜间起床、拒药、少食、怀疑东西被偷、反复要回家、情绪激动和自己的疲惫。复诊时，医生需要的是清楚的近期变化，但家属常常只能依靠记忆和碎片聊天记录。
@@ -80,7 +86,7 @@ CareMind 的目标不是替医生判断病情，而是帮助家属把这些混�
 | 复诊时回忆不清 | 近 7 天 / 30 天复诊摘要 |
 | 记录太私密 | Android 端侧隐私模式 |
 | 照护者快撑不住 | 压力识别 + 支援提醒 |
-| iPhone 用户需要使用 App | iOS 云端 Agent 版 |
+| iPhone 用户需要使用 App | iOS 云端 Agent 版 + iPhone 端侧架构 |
 
 产品闭环：
 
@@ -113,6 +119,7 @@ Edge AI 证据：
 - 模型目录：App 调用 `GET /api/models`，Cloud Run 动态扫描 Google Cloud Storage
 - 隐私路由：`frontend/lib/inference/inference-router.ts` 根据模式选择本地或云端
 - 离线演示：下载模型后可关闭 Wi-Fi / 移动网络，演示本地照护理解
+- iPhone 路线：当前走云端 Agent；后续通过 Swift Native Module 接入 iOS 本地模型，详见 [iPhone 端侧架构补充](docs/ios-edge-architecture.md)
 
 ### 模型使用说明
 
@@ -121,10 +128,11 @@ Edge AI 证据：
 | Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | 可演示 | 敏感照护记录本地理解与建议生成 |
 | Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | 已支持路径 / 实验性 | 通过动态模型目录支持，真机稳定性取决于设备内存 |
 | iPhone / iOS 云端版 | Cloud Run Agent workflow | 已支持 | 完整 App 体验、资料上传、录音上传转写 |
+| iPhone / iOS 端侧架构 | Swift Native Module + LiteRT / MediaPipe LLM | 架构已补充 | 面向 iPhone 用户的后续本地隐私推理路线 |
 | 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 完整工作流、摘要、工具调用 |
 | 稳定性兜底 | deterministic parser / fallback builders | 已完成 | 保证 Demo 不因小模型输出不完整而中断 |
 
-不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。iPhone 端当前走云端 Agent，不承诺本地 Gemma LiteRT 推理。
+不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。iPhone 端当前走云端 Agent；iPhone 本地推理属于已设计的下一阶段架构，不作为当前已完成离线演示能力声明。
 
 ## 架构设计
 
@@ -134,6 +142,10 @@ flowchart TD
     B --> C["Android 端侧隐私模式"]
     C --> D["Gemma LiteRT 原生模块"]
     D --> E["本地结构化解析"]
+    B --> N["iPhone 云端版 / 端侧架构"]
+    N --> O["Swift Native Module 规划"]
+    O --> P["LiteRT / MediaPipe LLM Runtime"]
+    P --> E
     B --> F["云端 Agent 模式"]
     F --> G["FastAPI 业务 API"]
     G --> H["照护工作流服务"]
@@ -143,6 +155,20 @@ flowchart TD
     G --> L["/api/models 动态模型目录"]
     L --> M["Google Cloud Storage 模型文件"]
 ```
+
+iPhone 端侧补充架构：
+
+```text
+iPhone 输入或录音
+-> 系统语音能力 / 手动输入转为可编辑文本
+-> Inference Router 判断 iOS 本地模型是否可用
+-> Swift Native Module 调用 Gemma-family 本地模型
+-> XML 结构化输出
+-> 复用现有 parser / fallback / guardrail
+-> 家属确认后进入复诊摘要或同步
+```
+
+详细设计见：[docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)
 
 核心接口：
 
@@ -201,6 +227,21 @@ npm install -g eas-cli
 eas login
 eas build -p ios --profile preview
 ```
+
+### iPhone / iOS 端侧架构预研
+
+当前 iPhone 端侧大模型推理尚未作为可演示能力声明。后续实现路线：
+
+```text
+Expo / React Native
+-> Swift Native Module
+-> iOS Model Manager
+-> LiteRT / MediaPipe LLM runtime
+-> XML output parser
+-> CareMind local care workflow
+```
+
+验收标准包括：飞行模式下本地返回结构化照护整理、不开云端请求、低内存不闪退、输出不越过医疗边界。详细计划见 [docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)。
 
 ### 本地后端 + 前端
 
@@ -266,8 +307,9 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 1. **Android 端侧隐私模式**
    代码：[frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma)
 
-2. **iPhone 云端 Agent 版**
+2. **iPhone 云端 Agent 版与端侧架构**
    配置：[frontend/app.json](frontend/app.json), [frontend/eas.json](frontend/eas.json)
+   设计：[docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)
 
 3. **本地 / 云端推理路由**
    代码：[frontend/lib/inference/inference-router.ts](frontend/lib/inference/inference-router.ts)
@@ -298,7 +340,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 | 交付物 | 位置 |
 |---|---|
 | 项目仓库 | <https://github.com/hyczy0809/CareMind> |
-| 比赛 PR | <https://github.com/gdgshanghai/Gemma4-Hackathon-ShangHai/pull/57> |
+| 比赛 PR | <https://github.com/gdgshanghai/Gemma4-Hackathon-ShangHai/pull/64> |
 | 演示视频 | <https://www.bilibili.com/video/BV1hFEg6ZEVb> |
 | Cloud Run 后端 | <https://caremind-1039168666325.us-west1.run.app> |
 | PRD | [docs/PRD.md](docs/PRD.md) |
@@ -306,6 +348,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 | Demo 分镜 | [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md) |
 | 录制指南 | [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md) |
 | iOS / EAS 构建配置 | [frontend/eas.json](frontend/eas.json) |
+| iPhone 端侧架构 | [docs/ios-edge-architecture.md](docs/ios-edge-architecture.md) |
 | 后端入口 | [main.py](main.py) |
 | OpenAI-compatible Agent 路由 | [openai_compat.py](openai_compat.py) |
 | Agent / Memory 工作流 | [my_agent](my_agent) |
@@ -325,6 +368,7 @@ CareMind/
 │   └── android/                    # Android 原生工程和 Gemma bridge
 ├── docs/
 │   ├── PRD.md
+│   ├── ios-edge-architecture.md
 │   └── demo-video/
 ├── my_agent/
 │   ├── care_workflow_service.py

@@ -25,6 +25,7 @@ CareMind 前端 MVP，基于 `CareMind_Frontend_Design_v0.2.md` 实现。
 - 设置页核心事件审计
 - 医疗边界前置提示文案
 - iPhone 云端版：支持完整 App、云端 Agent 工作流、资料上传与录音上传转写
+- iPhone 端侧架构：已补充 Swift Native Module + iOS 本地模型路线
 - Android 隐私模式：支持 Gemma LiteRT 端侧模型演示
 
 ## 运行方式
@@ -64,7 +65,7 @@ iPhone 端当前支持完整 CareMind App 与云端 Agent 工作流：
 - 录音上传转写
 - 沟通话术与照护建议
 
-边界说明：iPhone 端暂不承诺本地 Gemma LiteRT 推理。C 赛道的端侧模型演示仍以 Android 真机为主；iPhone 端会走已部署的 Cloud Run 后端。
+边界说明：iPhone 端当前默认走已部署的 Cloud Run 后端；iPhone 本地 Gemma-family 推理已经补充架构方案，但还不是当前可演示离线能力。C 赛道的端侧模型演示仍以 Android 真机为主。
 
 本地 iOS 模拟器运行：
 
@@ -91,6 +92,29 @@ eas build -p ios --profile preview
 ```bash
 eas build -p ios --profile ios-simulator
 ```
+
+#### iPhone 端侧架构路线
+
+iPhone 用户同样需要隐私优先能力。后续 iOS 端侧路线会复用现有 `inference-router`、XML 输出约束和 fallback builders，只新增 Swift Native Module 与 iOS 模型管理层：
+
+```text
+iPhone App
+-> Inference Router
+-> iOS Local Inference Adapter
+-> Swift Native Module
+-> LiteRT / MediaPipe LLM runtime
+-> XML parser / guardrail / fallback
+-> 本地照护整理
+```
+
+实现前提：
+
+- iOS 兼容模型完成真机内存和稳定性测试。
+- 模型下载后保存在 App 私有目录，并避免进入 iCloud 备份。
+- 隐私模式下若本地模型不可用，不静默上传云端，必须让用户确认。
+- 语音先通过系统能力或上传转写变成可编辑文本，本地模型负责照护理解，不在本阶段承诺本地语音转写。
+
+详细方案见：`../docs/ios-edge-architecture.md`。
 
 ### 后端地址配置
 
