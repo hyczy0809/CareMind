@@ -225,6 +225,16 @@ cd frontend
 EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
 ```
 
+### On-device LLM output format
+
+Every local-inference task (SmartLog structuring, medical-boundary guardrail, follow-up summary) requires the small model to emit structured data. 1B–4B class on-device models are significantly more reliable with **XML tag output** than with strict JSON syntax. The output format is controlled by an environment variable:
+
+| Var | Default | Options |
+|---|---|---|
+| `EXPO_PUBLIC_LOCAL_OUTPUT_FORMAT` | `xml` | `xml` or `json` |
+
+The JSON path is retained as a rollback and for format A/B comparison. Both paths converge to the same normalisation and fallback logic; parsing failures in either format fall through to deterministic regex-based builders. See `frontend/lib/inference/local/format-config.ts` for details.
+
 If a release APK is built without `EXPO_PUBLIC_CAREMIND_API_URL`, CareMind fails closed with a clear configuration error instead of calling the phone's localhost.
 
 ## API Examples

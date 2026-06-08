@@ -226,6 +226,11 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
                 }
                 val elapsed = System.currentTimeMillis() - started
                 Log.i(tag, "generate done requestId=$requestId elapsedMs=$elapsed outLen=${text.length}")
+                // Dump first 400 chars of model output to logcat so we can
+                // verify whether the model produced parseable JSON / XML.
+                // Trim newlines since logcat splits messages on \n.
+                val preview = text.replace("\n", " \\n ").take(400)
+                Log.i(tag, "generate output preview requestId=$requestId | $preview")
                 promise.resolve(buildGenerationResult(text, null, elapsed))
             } catch (t: Throwable) {
                 Log.e(tag, "generate failed requestId=$requestId", t)

@@ -12,6 +12,9 @@ import { Gemma } from "./gemma-native";
 import { ensureEngine } from "./model-manager";
 import { parseJsonObject, coerceString } from "./json-extract";
 import { buildGuardrailPrompt, type LocalGuardrailJson } from "./prompts";
+import { buildGuardrailXmlPrompt } from "./prompts-xml";
+import { parseGuardrailXml } from "./xml-parsers";
+import { isXmlOutput, LOCAL_OUTPUT_FORMAT } from "./format-config";
 import { DEFAULT_TOP_K } from "./constants";
 import { reportOnDeviceInference } from "./telemetry";
 
@@ -68,15 +71,34 @@ export async function checkGuardrailLocal(
 
   try {
     filename = await ensureEngine();
-    const result = await Gemma.generate(buildGuardrailPrompt(request.note), {
+    const xmlMode = isXmlOutput();
+    const prompt = xmlMode
+      ? buildGuardrailXmlPrompt(request.note)
+      : buildGuardrailPrompt(request.note);
+    const result = await Gemma.generate(prompt, {
       filename,
       maxTokens: 256,
       temperature: 0.2,
       topK: DEFAULT_TOP_K
     });
     outputChars = result.text.length;
-    parsed = parseJsonObject<LocalGuardrailJson>(result.text);
-    if (!parsed) errorKind = "json_parse_failed";
+
+    if (xmlMode) {
+      const xml = parseGuardrailXml(result.text);
+      if (xml) {
+        parsed = {
+          triggered: xml.triggered,
+          type: xml.type,
+          message: xml.message,
+          alternative_cta: xml.alternativeCta
+            ? { label: xml.alternativeCta.label, action: xml.alternativeCta.action }
+            : null
+        };
+      }
+    } else {
+      parsed = parseJsonObject<LocalGuardrailJson>(result.text);
+    }
+    if (!parsed) errorKind = `${LOCAL_OUTPUT_FORMAT}_parse_failed`;
   } catch (error) {
     console.warn("[local] checkGuardrail Gemma failure, falling back", error);
     errorKind = error instanceof Error ? error.message.slice(0, 60) : "engine_error";
