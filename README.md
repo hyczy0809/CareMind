@@ -12,7 +12,7 @@
 
 - **Android 端侧隐私模式**：已支持 Gemma LiteRT 端侧演示，敏感照护记录可优先在本机处理。
 - **iPhone 云端 Agent 版**：已支持完整 App 与云端 Agent 工作流。
-- **iPhone 端侧桥接**：已提交 iOS Swift Native Bridge，可做模型下载、校验、删除和 stub XML 输出；真实 LiteRT / MediaPipe iOS runtime 待接入。
+- **iPhone 端侧隐私模式**：已部署首版 iOS Swift Native Bridge + llama.cpp，可做 GGUF 模型下载、校验、删除和端侧 XML 输出；当前为 CPU / Accelerate 路径，后续继续做 Metal 与更大模型压测。
 - **云端 Agent 后端**：已部署到 Google Cloud Run，提供照护工作流、复诊摘要、资料上传和模型目录接口。
 
 安全边界：CareMind 不是医疗器械，不诊断、不处方、不判断检查、不替代医生或急救服务。它只帮助家庭整理照护观察，并准备复诊沟通材料。
@@ -100,6 +100,16 @@ iPhone 端验证路径：
 iPhone / iOS Simulator
 -> Cloud Run 后端
 -> 智能记录、今日照护、复诊准备、资料上传、录音上传转写
+```
+
+iPhone 端侧验证路径：
+
+```text
+iPhone App
+-> 设置 / 隐私模式
+-> 下载 Gemma 3 1B GGUF 模型
+-> 输入敏感照护记录
+-> llama.cpp 本机生成非诊断性 XML 输出
 ```
 
 ## 4. 项目仓库链接
@@ -225,7 +235,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 | 前端 | Expo SDK 52, React Native 0.76, Expo Router, TypeScript |
 | 前端 UI | React Native Components, lucide-react-native, expo-blur, expo-haptics, expo-linear-gradient |
 | Android 端侧 | Kotlin Native Module, MediaPipe GenAI runtime, Gemma LiteRT `.litertlm` / `.task` |
-| iOS 端侧桥接 | Expo Swift Native Module, iOS Model Store, stub XML local engine |
+| iOS 端侧 | Expo Swift Native Module, iOS Model Store, llama.cpp GGUF local engine, CPU / Accelerate runtime |
 | 后端 | FastAPI, Uvicorn, Python 3.12 |
 | Agent | Google ADK Agent, OpenAI-compatible model adapter, Cloudflare AI Gateway |
 | Memory | JSON-backed Memory Store, Memory Router, Memory Policy, Memory Tools |
@@ -242,9 +252,9 @@ flowchart TD
     B --> C["Android 端侧隐私模式"]
     C --> D["Gemma LiteRT 原生模块"]
     D --> E["本地结构化解析"]
-    B --> N["iPhone 云端版 / 端侧桥接"]
+    B --> N["iPhone 云端版 / 端侧隐私模式"]
     N --> O["Swift Native Module"]
-    O --> P["Stub Engine / LiteRT Runtime 待接入"]
+    O --> P["llama.cpp GGUF Runtime"]
     P --> E
     B --> F["云端 Agent 模式"]
     F --> G["FastAPI 业务 API"]
@@ -304,11 +314,11 @@ POST /v1/chat/completions
 | Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | 可演示 | 敏感照护记录本地理解与建议生成 |
 | Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | 已支持路径 / 实验性 | 通过动态模型目录支持，真机稳定性取决于设备内存 |
 | iPhone / iOS 云端版 | Cloud Run Agent workflow | 已支持 | 完整 App 体验、资料上传、录音上传转写 |
-| iPhone / iOS 端侧桥接 | Swift Native Module + stub local engine | 桥接已提交 / runtime 待接入 | 模型生命周期、下载校验、XML stub 输出和未来本地推理入口 |
+| iPhone / iOS 端侧隐私模式 | Swift Native Module + llama.cpp GGUF runtime | 已部署首版 / 继续性能压测 | 模型生命周期、下载校验、端侧 XML 输出和本地推理入口 |
 | 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 完整工作流、摘要、工具调用 |
 | 稳定性兜底 | deterministic parser / fallback builders | 已完成 | 保证 Demo 不因小模型输出不完整而中断 |
 
-当前真机端侧演示默认使用 Gemma 3 1B LiteRT。Gemma 4 E2B/E4B 是动态模型目录中预留的更大候选模型，不作为普通手机默认稳定模型承诺。iPhone 端当前默认走云端 Agent；iOS Native Bridge 已提交，但真实 iOS 本地大模型 runtime 尚未接入。
+当前真机端侧演示默认使用 Android Gemma 3 1B LiteRT；iPhone 端侧默认使用 Gemma 3 1B GGUF + llama.cpp CPU / Accelerate runtime。Gemma 4 E2B/E4B 是动态模型目录中预留的更大候选模型，不作为普通手机默认稳定模型承诺；iOS Metal 加速和更大模型作为后续优化方向继续压测。
 
 ## 8. 项目亮点
 
@@ -316,7 +326,7 @@ POST /v1/chat/completions
    CareMind 围绕照护日志、今日关注、沟通话术、复诊摘要和照护者压力支持组织输出。
 
 2. **端侧隐私是产品需求，不是装饰性技术点**
-   失智症照护记录常常包含家庭压力、患者状态和照护者崩溃时刻。Android 隐私模式允许敏感文字记录在本机完成初步理解。
+   失智症照护记录常常包含家庭压力、患者状态和照护者崩溃时刻。Android 与 iPhone 隐私模式都让敏感文字记录可以优先在本机完成初步理解。
 
 3. **云端多 Agent + Memory 工作流**
    6 个显式 ADK Agent 负责事件结构化、非诊断性关注提示、照护者支持、行动计划和复诊摘要。Memory Router 会调取患者画像、近期事件、行为基线和用药记录。
@@ -325,7 +335,7 @@ POST /v1/chat/completions
    `frontend/app` 和 `frontend/components` 包含今日照护、智能记录、复诊准备、设置页、Memory 提示、资料上传和隐私模式 UI。
 
 5. **Android 与 iPhone 路线都保留**
-   Android 用于 C 赛道端侧硬件演示；iPhone 端支持云端 Agent，并已有 Swift Native Bridge 作为后续端侧接入入口。
+   Android 用于 C 赛道端侧硬件演示；iPhone 端同时支持云端 Agent 与 llama.cpp 端侧隐私模式，便于覆盖更多真实照护者设备。
 
 6. **医疗边界前置**
    系统不诊断、不处方、不判断检查。复诊摘要和资料进入报告前需要家属确认。

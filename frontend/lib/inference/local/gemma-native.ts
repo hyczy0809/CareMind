@@ -34,6 +34,8 @@ export interface GemmaEngineOptions {
    * Try 1024 first when loading a 2 B model is OOM-ing.
    */
   maxTokens?: number;
+  /** iOS llama.cpp context window override. Defaults to 2048. */
+  contextTokens?: number;
 }
 
 export interface GemmaGenerateOptions extends GemmaEngineOptions {

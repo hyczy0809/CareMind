@@ -83,7 +83,7 @@ export function PrivacyModeCard() {
   const unsupportedPlatformLabel = Platform.OS === "ios" ? "iPhone" : Platform.OS === "web" ? "Web" : "当前平台";
   const localSubtitle =
     Platform.OS === "ios"
-      ? "开启后优先使用 iPhone 本地模型处理文字照护记录；当前 iOS 先跑通本地 XML stub，语音暂不走本地模型。"
+      ? "开启后优先使用 iPhone 本地 GGUF 模型处理文字照护记录；语音暂不走本地模型。"
       : "开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。";
 
   useEffect(() => subscribeManager(setManager), []);

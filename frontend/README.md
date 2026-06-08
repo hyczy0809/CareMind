@@ -25,7 +25,7 @@ CareMind 前端 MVP，基于 `CareMind_Frontend_Design_v0.2.md` 实现。
 - 设置页核心事件审计
 - 医疗边界前置提示文案
 - iPhone 云端版：支持完整 App、云端 Agent 工作流、资料上传与录音上传转写
-- iPhone 端侧桥接：已补充 Swift Native Module，支持模型下载、校验、删除和 stub 本地输出；真实 LiteRT / MediaPipe iOS runtime 待接入
+- iPhone 端侧隐私模式：已接入 Swift Native Module + llama.cpp，本地 GGUF 模型支持下载、校验、删除和端侧 XML 输出
 - Android 隐私模式：支持 Gemma LiteRT 端侧模型演示
 
 ## 运行方式
@@ -65,7 +65,7 @@ iPhone 端当前支持完整 CareMind App 与云端 Agent 工作流：
 - 录音上传转写
 - 沟通话术与照护建议
 
-边界说明：iPhone 端当前默认走已部署的 Cloud Run 后端；仓库里已有 iOS Native Bridge，可以管理模型文件并返回 stub XML 输出，但真实 Gemma-family iOS runtime 还没有接入。C 赛道的可演示端侧模型仍以 Android 真机为主。
+边界说明：iPhone 端默认仍可走已部署的 Cloud Run 后端；开启隐私模式且 GGUF 模型就绪时，会通过 iOS Native Bridge 调用本地 llama.cpp runtime。当前 iOS runtime 为 CPU / Accelerate 路径，Metal 加速和更大模型需要继续做真机性能测试。
 
 本地 iOS 模拟器运行：
 
@@ -93,16 +93,16 @@ eas build -p ios --profile preview
 eas build -p ios --profile ios-simulator
 ```
 
-#### iPhone 端侧桥接路线
+#### iPhone 端侧隐私模式
 
-iPhone 用户同样需要隐私优先能力。当前代码已经有 `modules/caremind-ios-gemma`，它是一个 Expo Swift Native Module，负责模型下载、校验、删除、stub 推理和运行时信息返回。后续接真实 iOS 本地大模型时，会继续复用现有 `inference-router`、XML 输出约束和 fallback builders：
+iPhone 用户同样需要隐私优先能力。当前代码里的 `modules/caremind-ios-gemma` 是一个 Expo Swift Native Module，负责模型下载、校验、删除、llama.cpp 推理和运行时信息返回，并复用现有 `inference-router`、XML 输出约束和 fallback builders：
 
 ```text
 iPhone App
 -> Inference Router
 -> iOS Local Inference Adapter
 -> Swift Native Module
--> Stub Engine / LiteRT 或 MediaPipe LLM runtime
+-> llama.cpp GGUF runtime
 -> XML parser / guardrail / fallback
 -> 本地照护整理
 ```

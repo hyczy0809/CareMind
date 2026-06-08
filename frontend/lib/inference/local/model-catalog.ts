@@ -20,12 +20,12 @@ export interface ModelCatalogEntry {
   /** "light" | "medium" | "full" | "unknown". Used for badge colour. */
   tier: string;
   size_bytes: number;
-  /** "litertlm" | "task". */
+  /** "litertlm" | "task" | "gguf". */
   format: string;
   /** Supported platforms. Older backend entries may omit this and are treated as Android-only. */
   platforms?: Array<"android" | "ios" | "web">;
   /** Native runtime expected for this model. */
-  runtime?: "mediapipe-llm" | "litert" | "litert-lm" | "ios-swift-stub" | "stub";
+  runtime?: "mediapipe-llm" | "litert" | "litert-lm" | "llama.cpp" | "stub";
   checksum_sha256?: string;
   min_ios?: string;
   min_device_memory_gb?: number;
@@ -68,18 +68,20 @@ const IOS_FALLBACK_CATALOG: ModelCatalog = {
   model_dir: "builtin-ios",
   models: [
     {
-      id: "caremind-ios-local-stub.model",
-      filename: "caremind-ios-local-stub.model",
-      display_name: "CareMind iOS Local Stub",
-      description: "iPhone 端侧推理桥接模型（开发版）。用于飞行模式跑通本机 XML 输出；后续可替换为 LiteRT iOS 兼容模型。",
+      id: "gemma-3-1b-it-Q4_K_M.gguf",
+      filename: "gemma-3-1b-it-Q4_K_M.gguf",
+      display_name: "Gemma 3 1B GGUF",
+      description: "iPhone 端侧文字整理模型（约 769 MB）。使用 llama.cpp 本地处理照护记录；语音暂不走本地模型。",
       supports_audio: false,
       tier: "light",
-      size_bytes: 1,
-      format: "stub",
+      size_bytes: 806_060_000,
+      format: "gguf",
       platforms: ["ios"],
-      runtime: "ios-swift-stub",
+      runtime: "llama.cpp",
+      min_ios: "16.0",
+      min_device_memory_gb: 4,
       recommended: true,
-      download_path: "/api/models/caremind-ios-local-stub.model",
+      download_path: "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf",
       modified_at: "fallback"
     }
   ]

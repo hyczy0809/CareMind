@@ -1,6 +1,8 @@
 import CryptoKit
+import Darwin
 import ExpoModulesCore
 import Foundation
+import llama
 
 public class CaremindGemmaModule: Module {
   private let store = IosModelStore()
@@ -86,46 +88,37 @@ public class CaremindGemmaModule: Module {
       guard self.store.isModelReady(filename) else {
         throw CaremindGemmaError.modelNotFound
       }
-      try self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path)
+      try self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path, options: options)
     }
 
     AsyncFunction("releaseEngine") {
       self.engine.release()
     }
 
-    AsyncFunction("logMemorySnapshot") { (_: String?) in
-      // Placeholder for parity with Android. iOS memory diagnostics will be
-      // added once a real LiteRT runtime is linked.
+    AsyncFunction("logMemorySnapshot") { (label: String?) in
+      self.engine.logMemorySnapshot(label: label ?? "manual")
     }
 
     AsyncFunction("getRuntimeInfo") { () -> [String: Any] in
-      [
-        "platform": "ios",
-        "runtime": self.engine.stubMode ? "stub" : "ios-swift-stub",
-        "accelerator": "cpu",
-        "supportsAudio": false,
-        "loadedModelId": self.engine.loadedModelId as Any
-      ]
+      self.engine.runtimeInfo()
     }
 
     AsyncFunction("generate") { (prompt: String, options: [String: Any]) async throws -> [String: Any] in
       let filename = options["filename"] as? String
       if let filename {
         try self.store.validateFilename(filename)
-        if self.engine.loadedModelId != filename {
-          guard self.store.isModelReady(filename) else {
-            throw CaremindGemmaError.modelNotFound
-          }
-          try self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path)
+        guard self.store.isModelReady(filename) else {
+          throw CaremindGemmaError.modelNotFound
         }
+        try self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path, options: options)
       }
 
       let started = Date()
-      let text = self.engine.generate(prompt: prompt)
+      let result = try self.engine.generate(prompt: prompt, options: options)
       let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
       return [
-        "text": text,
-        "tokenCount": max(1, text.count / 4),
+        "text": result.text,
+        "tokenCount": result.tokenCount,
         "elapsedMs": elapsedMs
       ]
     }
@@ -164,6 +157,11 @@ enum CaremindGemmaError: Error, LocalizedError {
   case modelNotFound
   case checksumFailed
   case localAudioNotSupported
+  case modelLoadFailed(String)
+  case contextInitFailed
+  case tokenizationFailed
+  case promptTooLong(Int, Int)
+  case inferenceFailed(String)
 
   var errorDescription: String? {
     switch self {
@@ -177,6 +175,16 @@ enum CaremindGemmaError: Error, LocalizedError {
       return "模型文件校验失败，请重新下载。"
     case .localAudioNotSupported:
       return "iPhone 隐私模式暂不支持本地语音转文字，请先手动输入，或明确选择云端转写。"
+    case .modelLoadFailed(let reason):
+      return "iPhone 本地模型加载失败：\(reason)"
+    case .contextInitFailed:
+      return "llama.cpp 上下文初始化失败。"
+    case .tokenizationFailed:
+      return "本地模型无法解析当前提示词。"
+    case .promptTooLong(let promptTokens, let contextTokens):
+      return "当前照护记录太长，本地模型上下文不足：\(promptTokens)/\(contextTokens) tokens。"
+    case .inferenceFailed(let reason):
+      return "iPhone 本地推理失败：\(reason)"
     }
   }
 }
@@ -252,30 +260,418 @@ final class IosModelStore {
   }
 }
 
+struct IosGemmaGeneration {
+  let text: String
+  let tokenCount: Int
+}
+
+struct IosLlamaLoadOptions: Equatable {
+  let backend: String
+  let contextTokens: UInt32
+
+  init(_ options: [String: Any]?) {
+    backend = (options?["backend"] as? String ?? "AUTO").uppercased()
+    let requested = IosLlamaLoadOptions.intValue(options?["contextTokens"])
+      ?? IosLlamaLoadOptions.intValue(options?["maxTokens"])
+      ?? 2048
+    contextTokens = UInt32(min(4096, max(1024, requested)))
+  }
+
+  var gpuLayers: Int32 {
+    return 0
+  }
+
+  var accelerator: String {
+    "cpu"
+  }
+
+  private static func intValue(_ value: Any?) -> Int? {
+    if let value = value as? Int { return value }
+    if let value = value as? Double { return Int(value) }
+    if let value = value as? NSNumber { return value.intValue }
+    return nil
+  }
+}
+
+struct IosLlamaGenerateOptions {
+  let maxNewTokens: Int
+  let temperature: Float
+  let topK: Int32
+
+  init(_ options: [String: Any]) {
+    maxNewTokens = min(1024, max(1, IosLlamaGenerateOptions.intValue(options["maxTokens"]) ?? 768))
+    temperature = Float(min(1.5, max(0.0, IosLlamaGenerateOptions.doubleValue(options["temperature"]) ?? 0.4)))
+    topK = Int32(min(128, max(1, IosLlamaGenerateOptions.intValue(options["topK"]) ?? 40)))
+  }
+
+  private static func intValue(_ value: Any?) -> Int? {
+    if let value = value as? Int { return value }
+    if let value = value as? Double { return Int(value) }
+    if let value = value as? NSNumber { return value.intValue }
+    return nil
+  }
+
+  private static func doubleValue(_ value: Any?) -> Double? {
+    if let value = value as? Double { return value }
+    if let value = value as? Int { return Double(value) }
+    if let value = value as? NSNumber { return value.doubleValue }
+    return nil
+  }
+}
+
 final class IosGemmaEngine {
-  var stubMode = true
-  private(set) var loadedModelId: String?
+  private let stateLock = NSRecursiveLock()
+  private let cancelLock = NSLock()
+  private let stubResponder = IosGemmaStubResponder()
+  private var llamaContext: IosLlamaContext?
+  private var loadedOptions: IosLlamaLoadOptions?
   private var cancelled = false
 
-  func load(modelId: String, modelPath _: String) throws {
+  var stubMode = false
+  private(set) var loadedModelId: String?
+
+  func load(modelId: String, modelPath: String, options: [String: Any]?) throws {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+
+    setCancelled(false)
+    if stubMode {
+      loadedModelId = modelId
+      loadedOptions = nil
+      return
+    }
+
+    let nextOptions = IosLlamaLoadOptions(options)
+    if loadedModelId == modelId, loadedOptions == nextOptions, llamaContext != nil {
+      return
+    }
+
+    releaseLocked()
+    llamaContext = try IosLlamaContext(modelPath: modelPath, options: nextOptions)
     loadedModelId = modelId
-    cancelled = false
+    loadedOptions = nextOptions
   }
 
   func release() {
-    loadedModelId = nil
-    cancelled = false
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    releaseLocked()
+    setCancelled(false)
   }
 
   func cancel() {
-    cancelled = true
+    setCancelled(true)
   }
 
-  func generate(prompt: String) -> String {
-    if cancelled {
-      cancelled = false
-      return "<caremind><guardrail><triggered>false</triggered><type>none</type></guardrail><boundary>已取消本地生成。</boundary></caremind>"
+  func generate(prompt: String, options: [String: Any]) throws -> IosGemmaGeneration {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+
+    if isCancelled() {
+      setCancelled(false)
+      return IosGemmaGeneration(text: IosGemmaEngine.cancelledXml, tokenCount: 0)
     }
+
+    if stubMode {
+      let text = stubResponder.generate(prompt: prompt)
+      return IosGemmaGeneration(text: text, tokenCount: max(1, text.count / 4))
+    }
+
+    guard let llamaContext else {
+      throw CaremindGemmaError.modelNotFound
+    }
+
+    let generateOptions = IosLlamaGenerateOptions(options)
+    let generation = try llamaContext.generate(
+      prompt: prompt,
+      options: generateOptions,
+      isCancelled: { [weak self] in self?.isCancelled() ?? false }
+    )
+    if isCancelled() {
+      setCancelled(false)
+    }
+    return generation
+  }
+
+  func runtimeInfo() -> [String: Any] {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return [
+      "platform": "ios",
+      "runtime": stubMode ? "stub" : "llama.cpp",
+      "accelerator": loadedOptions?.accelerator ?? "cpu",
+      "supportsAudio": false,
+      "loadedModelId": loadedModelId as Any,
+      "modelDescription": llamaContext?.modelDescription as Any,
+      "systemInfo": IosLlamaContext.systemInfo()
+    ]
+  }
+
+  func logMemorySnapshot(label: String) {
+    let usedMb = residentMemoryBytes() / 1024 / 1024
+    NSLog("[CaremindGemma] MEM[\(label)] resident=\(usedMb)MB loadedModel=\(loadedModelId ?? "none") runtime=\(stubMode ? "stub" : "llama.cpp")")
+  }
+
+  private func releaseLocked() {
+    llamaContext = nil
+    loadedModelId = nil
+    loadedOptions = nil
+  }
+
+  private func isCancelled() -> Bool {
+    cancelLock.lock()
+    defer { cancelLock.unlock() }
+    return cancelled
+  }
+
+  private func setCancelled(_ value: Bool) {
+    cancelLock.lock()
+    cancelled = value
+    cancelLock.unlock()
+  }
+
+  private func residentMemoryBytes() -> UInt64 {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    let result = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+      }
+    }
+    return result == KERN_SUCCESS ? UInt64(info.resident_size) : 0
+  }
+
+  fileprivate static let cancelledXml = "<caremind><guardrail><triggered>false</triggered><type>none</type></guardrail><boundary>已取消本地生成。</boundary></caremind>"
+}
+
+final class IosLlamaContext {
+  private let model: OpaquePointer
+  private let context: OpaquePointer
+  private let vocab: OpaquePointer
+  private let loadOptions: IosLlamaLoadOptions
+  let modelDescription: String
+
+  init(modelPath: String, options: IosLlamaLoadOptions) throws {
+    IosLlamaBackend.ensureStarted()
+    loadOptions = options
+
+    var modelParams = llama_model_default_params()
+    modelParams.n_gpu_layers = options.gpuLayers
+    modelParams.use_mmap = true
+
+    guard let loadedModel = modelPath.withCString({ llama_model_load_from_file($0, modelParams) }) else {
+      throw CaremindGemmaError.modelLoadFailed("无法打开 GGUF 文件，请确认模型格式为 llama.cpp GGUF。")
+    }
+    model = loadedModel
+
+    var contextParams = llama_context_default_params()
+    contextParams.n_ctx = options.contextTokens
+    contextParams.n_batch = options.contextTokens
+    contextParams.n_ubatch = min(options.contextTokens, 512)
+    let threads = max(1, min(8, ProcessInfo.processInfo.processorCount - 2))
+    contextParams.n_threads = Int32(threads)
+    contextParams.n_threads_batch = Int32(threads)
+
+    guard let loadedContext = llama_init_from_model(loadedModel, contextParams) else {
+      llama_model_free(loadedModel)
+      throw CaremindGemmaError.contextInitFailed
+    }
+    context = loadedContext
+
+    guard let loadedVocab = llama_model_get_vocab(loadedModel) else {
+      llama_free(loadedContext)
+      llama_model_free(loadedModel)
+      throw CaremindGemmaError.contextInitFailed
+    }
+    vocab = loadedVocab
+    modelDescription = IosLlamaContext.describe(model: loadedModel)
+  }
+
+  deinit {
+    llama_free(context)
+    llama_model_free(model)
+  }
+
+  func generate(
+    prompt: String,
+    options: IosLlamaGenerateOptions,
+    isCancelled: () -> Bool
+  ) throws -> IosGemmaGeneration {
+    llama_memory_clear(llama_get_memory(context), true)
+    let promptTokens = try tokenize(prompt, addBos: true)
+    let contextTokens = Int(llama_n_ctx(context))
+    guard promptTokens.count + 2 < contextTokens else {
+      throw CaremindGemmaError.promptTooLong(promptTokens.count, contextTokens)
+    }
+
+    let maxNewTokens = min(options.maxNewTokens, max(1, contextTokens - promptTokens.count - 2))
+    var batch = llama_batch_init(Int32(max(promptTokens.count, 1)), 0, 1)
+    defer { llama_batch_free(batch) }
+
+    llamaBatchClear(&batch)
+    for (idx, token) in promptTokens.enumerated() {
+      llamaBatchAdd(&batch, token, Int32(idx), [0], idx == promptTokens.count - 1)
+    }
+
+    guard llama_decode(context, batch) == 0 else {
+      throw CaremindGemmaError.inferenceFailed("prompt decode failed")
+    }
+
+    guard let sampler = makeSampler(options) else {
+      throw CaremindGemmaError.inferenceFailed("sampler init failed")
+    }
+    defer { llama_sampler_free(sampler) }
+
+    var generatedText = ""
+    var utf8Buffer: [CChar] = []
+    var generatedTokens = 0
+    var currentPosition = Int32(promptTokens.count)
+
+    while generatedTokens < maxNewTokens {
+      if isCancelled() {
+        return IosGemmaGeneration(text: IosGemmaEngine.cancelledXml, tokenCount: generatedTokens)
+      }
+
+      let nextToken = llama_sampler_sample(sampler, context, -1)
+      if llama_vocab_is_eog(vocab, nextToken) {
+        break
+      }
+
+      if let piece = tokenToPiece(nextToken, buffer: &utf8Buffer) {
+        generatedText += piece
+      }
+
+      llamaBatchClear(&batch)
+      llamaBatchAdd(&batch, nextToken, currentPosition, [0], true)
+      currentPosition += 1
+      generatedTokens += 1
+
+      guard llama_decode(context, batch) == 0 else {
+        throw CaremindGemmaError.inferenceFailed("token decode failed")
+      }
+    }
+
+    return IosGemmaGeneration(text: generatedText, tokenCount: generatedTokens)
+  }
+
+  static func systemInfo() -> String {
+    guard let info = llama_print_system_info() else {
+      return ""
+    }
+    return String(cString: info)
+  }
+
+  private func makeSampler(_ options: IosLlamaGenerateOptions) -> UnsafeMutablePointer<llama_sampler>? {
+    let sampler = llama_sampler_chain_init(llama_sampler_chain_default_params())
+    guard let sampler else {
+      return nil
+    }
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(options.topK))
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(options.temperature))
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(UInt32.random(in: 1...UInt32.max)))
+    return sampler
+  }
+
+  private func tokenize(_ text: String, addBos: Bool) throws -> [llama_token] {
+    let utf8Count = text.utf8.count
+    var capacity = max(8, utf8Count + (addBos ? 1 : 0) + 8)
+    var tokens = [llama_token](repeating: 0, count: capacity)
+
+    var tokenCount = text.withCString {
+      llama_tokenize(vocab, $0, Int32(utf8Count), &tokens, Int32(tokens.count), addBos, true)
+    }
+    if tokenCount < 0 {
+      capacity = Int(-tokenCount)
+      tokens = [llama_token](repeating: 0, count: capacity)
+      tokenCount = text.withCString {
+        llama_tokenize(vocab, $0, Int32(utf8Count), &tokens, Int32(tokens.count), addBos, true)
+      }
+    }
+
+    guard tokenCount > 0 else {
+      throw CaremindGemmaError.tokenizationFailed
+    }
+    return Array(tokens.prefix(Int(tokenCount)))
+  }
+
+  private func tokenToPiece(_ token: llama_token, buffer: inout [CChar]) -> String? {
+    var piece = [CChar](repeating: 0, count: 16)
+    var count = llama_token_to_piece(vocab, token, &piece, Int32(piece.count), 0, false)
+    if count < 0 {
+      piece = [CChar](repeating: 0, count: Int(-count))
+      count = llama_token_to_piece(vocab, token, &piece, Int32(piece.count), 0, false)
+    }
+    guard count > 0 else {
+      return nil
+    }
+
+    let bytes = piece.prefix(Int(count)).map { UInt8(bitPattern: $0) }
+    if buffer.isEmpty, let text = String(data: Data(bytes), encoding: .utf8) {
+      return text
+    }
+
+    buffer.append(contentsOf: piece.prefix(Int(count)))
+    let bufferedBytes = buffer.map { UInt8(bitPattern: $0) }
+    guard let text = String(data: Data(bufferedBytes), encoding: .utf8) else {
+      if buffer.count > 8 {
+        buffer.removeAll()
+      }
+      return nil
+    }
+    buffer.removeAll()
+    return text
+  }
+
+  private static func describe(model: OpaquePointer) -> String {
+    var buffer = [CChar](repeating: 0, count: 256)
+    let count = llama_model_desc(model, &buffer, buffer.count)
+    guard count > 0 else {
+      return "llama.cpp model"
+    }
+    let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+    return String(decoding: bytes, as: UTF8.self)
+  }
+}
+
+enum IosLlamaBackend {
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var started = false
+
+  static func ensureStarted() {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !started else {
+      return
+    }
+    llama_backend_init()
+    started = true
+  }
+}
+
+private func llamaBatchClear(_ batch: inout llama_batch) {
+  batch.n_tokens = 0
+}
+
+private func llamaBatchAdd(
+  _ batch: inout llama_batch,
+  _ token: llama_token,
+  _ position: llama_pos,
+  _ sequenceIds: [llama_seq_id],
+  _ logits: Bool
+) {
+  let index = Int(batch.n_tokens)
+  batch.token[index] = token
+  batch.pos[index] = position
+  batch.n_seq_id[index] = Int32(sequenceIds.count)
+  for (offset, sequenceId) in sequenceIds.enumerated() {
+    batch.seq_id[index]![offset] = sequenceId
+  }
+  batch.logits[index] = logits ? 1 : 0
+  batch.n_tokens += 1
+}
+
+final class IosGemmaStubResponder {
+  func generate(prompt: String) -> String {
 
     let note = extractUserNote(from: prompt)
     let nightWakings = extractNightWakings(note)
@@ -333,7 +729,7 @@ final class IosGemmaEngine {
           <type>\(attentionType)</type>
           <severity>\(severity)</severity>
           <title>\(escapeXml(titleForAttention(attentionType)))</title>
-          <evidence>\(escapeXml(note.isEmpty ? "本地 stub 未提取到原始记录。" : note))</evidence>
+          <evidence>\(escapeXml(note.isEmpty ? "本机备用模式未提取到原始记录。" : note))</evidence>
           <doctor_feedback_hint>如持续出现，建议复诊时告知医生。</doctor_feedback_hint>
           <actions>
             <action>
@@ -354,7 +750,7 @@ final class IosGemmaEngine {
         <type>\(acute ? "crisis" : "none")</type>
         <message>\(escapeXml(acute ? "记录中出现急性危险信号，建议立刻联系当地紧急服务或医生。" : ""))</message>
       </guardrail>
-      <boundary>以上为 iPhone 本机 stub 整理结果，不是诊断、处方或检查建议。</boundary>
+      <boundary>以上为 iPhone 本机备用整理结果，不是诊断、处方或检查建议。</boundary>
     </caremind>
     """
   }
