@@ -44,11 +44,13 @@ It is built for family caregivers, not clinicians. CareMind does not diagnose, p
   <img src="docs/demo-video/generated/caremind-demo-video-preview.png" alt="CareMind demo video preview" width="860" />
 </p>
 
-Open the generated demo assets:
+Demo assets kept in Git:
 
 - Preview image: [docs/demo-video/generated/caremind-demo-video-preview.png](docs/demo-video/generated/caremind-demo-video-preview.png)
-- Demo video: [docs/demo-video/generated/caremind-demo-video.webm](docs/demo-video/generated/caremind-demo-video.webm)
-- Browser-rendered source: [docs/demo-video/generated/caremind-demo-video.html](docs/demo-video/generated/caremind-demo-video.html)
+- Storyboard: [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md)
+- Recording guide: [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md)
+
+Rendered video files and browser-generated HTML are intentionally not tracked in normal Git history. Regenerate them locally when preparing a pitch or social video.
 
 Core demo input:
 
@@ -89,7 +91,9 @@ In the current Android MVP:
 - **Gemma 4 E2B / E4B** remain optional larger experiments, but they are not the default because they can exceed memory limits and crash on many real phones.
 - **Cloud mode** uses an OpenAI-compatible API route for the full agent workflow and knowledge-backed responses.
 - **Voice input** currently uses Android system speech recognition to turn speech into editable text. Local Gemma audio transcription is feature-flagged off until the native audio path is stable.
-- The Edge AI demo model currently served by the backend is `Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm` (`.litertlm`, about 557 MB). It should be distributed through an external model artifact host or Git LFS, not normal Git history.
+- The Edge AI demo model currently served by the backend is `Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm` (`.litertlm`, about 557 MB).
+- The APK loads its downloadable model list from `GET /api/models`; the Cloud Run backend scans Google Cloud Storage dynamically, so adding a new model does not require rebuilding the APK.
+- Model files should live in Google Cloud Storage or Git LFS, not normal Git history.
 
 This split lets CareMind demonstrate both a practical cloud Agent workflow and a privacy-oriented on-device path for sensitive family-care data.
 
@@ -128,15 +132,35 @@ Suggested video caption:
 Network off. Gemma LiteRT runs on the Android device for local care-note understanding.
 ```
 
-### Model File
+### Model Distribution
 
-For the hardware demo, place the model where the Android app can discover it:
+Preferred path for teammate testing:
 
 ```bash
-adb push Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm /sdcard/Android/data/<your.package.name>/files/models/
+gcloud storage cp ./Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm gs://caremind-498713-models-asia/models/
 ```
 
-The current local model artifact used during development is:
+Then open the app:
+
+```text
+Settings -> Privacy Mode -> 刷新 -> Download Gemma 3 1B
+```
+
+The backend exposes a stable download path:
+
+```http
+GET /api/models/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm
+```
+
+On Cloud Run this returns a redirect to Google Cloud Storage, which avoids Cloud Run large-response limits for 500 MB+ artifacts.
+
+Optional manual hardware-demo path:
+
+```bash
+adb push Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm /sdcard/Android/data/com.caremind.app/files/models/
+```
+
+Current local model artifact:
 
 ```text
 Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm
@@ -195,7 +219,8 @@ The Edge AI demo focuses on local text understanding and care suggestion generat
 | On-device model | Gemma 3 1B `.litertlm` via Android native module |
 | Memory | JSON-backed MVP memory store |
 | Documents | Local upload storage and caregiver review flow |
-| Demo video | Single-file HTML canvas animation rendered to WebM |
+| Model artifacts | Google Cloud Storage dynamic catalog, optional Git LFS |
+| Demo video | HTML canvas storyboard and locally rendered video assets |
 
 ## Quick Start
 
@@ -326,6 +351,31 @@ cd frontend
 EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
 ```
 
+Current demo backend:
+
+```text
+https://caremind-1039168666325.us-west1.run.app
+```
+
+Example release build:
+
+```bash
+cd frontend/android
+NODE_ENV=production \
+EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app \
+./gradlew :app:assembleRelease
+```
+
+### On-device LLM output format
+
+Every local-inference task (SmartLog structuring, medical-boundary guardrail, follow-up summary) requires the small model to emit structured data. 1B–4B class on-device models are significantly more reliable with **XML tag output** than with strict JSON syntax. The output format is controlled by an environment variable:
+
+| Var | Default | Options |
+|---|---|---|
+| `EXPO_PUBLIC_LOCAL_OUTPUT_FORMAT` | `xml` | `xml` or `json` |
+
+The JSON path is retained as a rollback and for format A/B comparison. Both paths converge to the same normalisation and fallback logic; parsing failures in either format fall through to deterministic regex-based builders. See `frontend/lib/inference/local/format-config.ts` for details.
+
 If a release APK is built without `EXPO_PUBLIC_CAREMIND_API_URL`, CareMind fails closed with a clear configuration error instead of calling the phone's localhost.
 
 ## API Examples
@@ -425,6 +475,8 @@ flowchart TD
     J --> K["Gemma 3 1B .litertlm"]
     J --> L["Android SpeechRecognizer"]
     C --> M["Follow-up summary data"]
+    B --> N["/api/models dynamic catalog"]
+    N --> O["Google Cloud Storage model artifacts"]
 ```
 
 Agent responsibilities:

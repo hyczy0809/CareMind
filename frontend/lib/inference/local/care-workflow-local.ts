@@ -38,6 +38,9 @@ import { ensureEngine } from "./model-manager";
 import { Gemma } from "./gemma-native";
 import { reportOnDeviceInference } from "./telemetry";
 import { buildCareWorkflowPrompt, type LocalCareWorkflowJson } from "./prompts";
+import { buildCareWorkflowXmlPrompt, type LocalCareWorkflowXml } from "./prompts-xml";
+import { parseCareWorkflowXml } from "./xml-parsers";
+import { isXmlOutput, LOCAL_OUTPUT_FORMAT } from "./format-config";
 import {
   buildAttentionItems,
   buildMemoryCandidate,
@@ -284,7 +287,8 @@ function normaliseGuardrail(
 }
 
 async function callGemmaWithRetry(
-  prompt: string
+  prompt: string,
+  parse: (text: string) => LocalCareWorkflowJson | null
 ): Promise<{ parsed: LocalCareWorkflowJson | null; filename: string; outputChars: number }> {
   const filename = await ensureEngine();
   const first = await Gemma.generate(prompt, {
@@ -293,11 +297,13 @@ async function callGemmaWithRetry(
     temperature: DEFAULT_TEMPERATURE,
     topK: DEFAULT_TOP_K
   });
-  const firstParsed = parseJsonObject<LocalCareWorkflowJson>(first.text);
+  const firstParsed = parse(first.text);
   if (firstParsed) return { parsed: firstParsed, filename, outputChars: first.text.length };
 
-  // One retry, asking for JSON only.
-  const retryPrompt = `${prompt}\n\n你上一次的回复无法解析为 JSON。请仅重新输出 JSON 对象本身。`;
+  // One retry, asking for the same format only.
+  const retryPrompt = `${prompt}\n\n你上一次的回复无法解析。请仅重新输出 ${
+    isXmlOutput() ? "XML 标签" : "JSON 对象"
+  }本身。`;
   const second = await Gemma.generate(retryPrompt, {
     filename,
     maxTokens: DEFAULT_MAX_TOKENS,
@@ -305,9 +311,98 @@ async function callGemmaWithRetry(
     topK: DEFAULT_TOP_K
   });
   return {
-    parsed: parseJsonObject<LocalCareWorkflowJson>(second.text),
+    parsed: parse(second.text),
     filename,
     outputChars: first.text.length + second.text.length
+  };
+}
+
+/**
+ * Re-shape an XML parse result into the snake_case `LocalCareWorkflowJson`
+ * shape that the existing `normalise…` functions consume. Lets us reuse the
+ * JSON-side normalisation/validation without a parallel pipeline.
+ */
+function xmlToJsonShape(xml: LocalCareWorkflowXml): LocalCareWorkflowJson {
+  const slog = xml.structuredLog;
+  return {
+    structured_log: slog
+      ? {
+          sleep: slog.sleep
+            ? { night_wakings: slog.sleep.nightWakings ?? null, note: slog.sleep.note }
+            : undefined,
+          behavior: slog.behavior
+            ? slog.behavior.map((b) => ({
+                label: b.label,
+                evidence: b.evidence,
+                frequency: b.frequency
+              }))
+            : undefined,
+          nutrition: slog.nutrition
+            ? {
+                meal_intake: slog.nutrition.mealIntake,
+                water_intake: slog.nutrition.waterIntake,
+                choking: slog.nutrition.choking,
+                weight_change: slog.nutrition.weightChange,
+                note: slog.nutrition.note
+              }
+            : undefined,
+          medication: slog.medication
+            ? {
+                mentioned: slog.medication.mentioned,
+                refusal_count: slog.medication.refusalCount ?? null,
+                missed_dose: slog.medication.missedDose,
+                duplicate_dose: slog.medication.duplicateDose,
+                medication_names: slog.medication.medicationNames,
+                note: slog.medication.note
+              }
+            : undefined,
+          safety: slog.safety
+            ? {
+                night_wandering: slog.safety.nightWandering,
+                door_exit_attempt: slog.safety.doorExitAttempt,
+                fall: slog.safety.fall,
+                wandering: slog.safety.wandering,
+                acute_danger: slog.safety.acuteDanger,
+                note: slog.safety.note
+              }
+            : undefined,
+          caregiver: slog.caregiver
+            ? { quote: slog.caregiver.quote, stress_level: slog.caregiver.stressLevel }
+            : undefined
+        }
+      : undefined,
+    attention_items: xml.attentionItems?.map((item) => ({
+      type: item.type,
+      severity: item.severity,
+      title: item.title,
+      evidence: item.evidence,
+      doctor_feedback_hint: item.doctorFeedbackHint,
+      actions: item.actions?.map((a) => ({
+        label: a.label,
+        alternative_label: a.alternativeLabel
+      }))
+    })),
+    memory_candidates: xml.memoryCandidates?.map((c) => ({
+      type: c.type,
+      title: c.title,
+      description: c.description,
+      evidence: c.evidence,
+      requires_confirmation: c.requiresConfirmation
+    })),
+    communication_script: xml.communicationScript
+      ? {
+          not_recommended: xml.communicationScript.notRecommended,
+          recommended: xml.communicationScript.recommended,
+          principle: xml.communicationScript.principle
+        }
+      : null,
+    guardrail: xml.guardrail
+      ? {
+          triggered: xml.guardrail.triggered,
+          type: xml.guardrail.type,
+          message: xml.guardrail.message
+        }
+      : undefined
   };
 }
 
@@ -322,11 +417,22 @@ export async function runCareWorkflowLocal(
   let errorKind: string | undefined;
 
   try {
-    const result = await callGemmaWithRetry(buildCareWorkflowPrompt(note));
+    const xmlMode = isXmlOutput();
+    const prompt = xmlMode
+      ? buildCareWorkflowXmlPrompt(note)
+      : buildCareWorkflowPrompt(note);
+    const parse = xmlMode
+      ? (text: string) => {
+          const x = parseCareWorkflowXml(text);
+          return x ? xmlToJsonShape(x) : null;
+        }
+      : (text: string) => parseJsonObject<LocalCareWorkflowJson>(text);
+
+    const result = await callGemmaWithRetry(prompt, parse);
     parsed = result.parsed;
     filename = result.filename;
     outputChars = result.outputChars;
-    if (!parsed) errorKind = "json_parse_failed";
+    if (!parsed) errorKind = `${LOCAL_OUTPUT_FORMAT}_parse_failed`;
   } catch (error) {
     console.warn("[local] runCareWorkflow Gemma failure, falling back", error);
     errorKind = error instanceof Error ? error.message.slice(0, 60) : "engine_error";

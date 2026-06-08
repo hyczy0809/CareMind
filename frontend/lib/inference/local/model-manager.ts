@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { buildModelDownloadUrl, DEFAULT_MODEL_FILENAME } from "./constants";
 import { Gemma, GEMMA_NATIVE_AVAILABLE, subscribeDownloadProgress } from "./gemma-native";
+import type { GemmaEngineOptions } from "./gemma-native";
 import {
   fetchModelCatalog,
   findModelById,
@@ -260,7 +261,16 @@ export async function resolveSelectedModelFilename(): Promise<string | null> {
  * Lazily make sure the engine is ready to generate using the currently
  * selected model. Throws if no model file exists.
  */
-export async function ensureEngine(): Promise<string> {
+/**
+ * Lazily make sure the engine is ready to generate using the currently
+ * selected model. Throws if no model file exists.
+ *
+ * Pass `options` to override hardware backend (CPU/GPU/AUTO) or KV-cache size.
+ * Falls back to AUTO + 2048 tokens, which lets the native side pick CPU for
+ * any model larger than ~1.5 GB on disk (Gemma 2B / 4B). Bump down to 1024
+ * if you see native OOM on lower-RAM phones.
+ */
+export async function ensureEngine(options: GemmaEngineOptions = {}): Promise<string> {
   if (!GEMMA_NATIVE_AVAILABLE) {
     throw new Error("当前平台不支持本地推理（仅 Android 真机）。");
   }
@@ -276,7 +286,7 @@ export async function ensureEngine(): Promise<string> {
   if (entry.status !== "ready") {
     throw new Error("当前选中的本地模型未就绪。");
   }
-  await Gemma.initEngine(filename);
+  await Gemma.initEngine(filename, options);
   return filename;
 }
 

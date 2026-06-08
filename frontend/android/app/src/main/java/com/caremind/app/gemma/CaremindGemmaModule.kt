@@ -142,7 +142,7 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun initEngine(filename: String?, promise: Promise) {
+    fun initEngine(filename: String?, options: ReadableMap?, promise: Promise) {
         if (stubMode.get()) {
             promise.resolve(null)
             return
@@ -150,15 +150,40 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
         scope.launch {
             try {
                 val safeName = requireFilename(filename)
+                val backend = parseBackend(options?.getStringOrNull("backend"))
+                val maxTokens = options?.getIntOrDefault("maxTokens", 2048) ?: 2048
+                Log.i(tag, "initEngine name=$safeName backend=$backend maxTokens=$maxTokens")
                 GemmaEngineHolder.ensureEngine(
                     reactApplicationContext,
-                    downloader.targetFile(safeName).absolutePath
+                    downloader.targetFile(safeName).absolutePath,
+                    backend,
+                    maxTokens
                 )
                 promise.resolve(null)
             } catch (t: Throwable) {
-                Log.w(tag, "initEngine failed", t)
-                promise.reject("INIT_ENGINE_FAILED", t.message ?: "init engine failed", t)
+                Log.e(tag, "initEngine failed", t)
+                promise.reject("INIT_ENGINE_FAILED", describeThrowable(t), t)
             }
+        }
+    }
+
+    @ReactMethod
+    fun releaseEngine(promise: Promise) {
+        try {
+            GemmaEngineHolder.release()
+            promise.resolve(null)
+        } catch (t: Throwable) {
+            promise.reject("RELEASE_ENGINE_FAILED", describeThrowable(t), t)
+        }
+    }
+
+    @ReactMethod
+    fun logMemorySnapshot(label: String?, promise: Promise) {
+        try {
+            GemmaEngineHolder.logMemorySnapshot(reactApplicationContext, label ?: "manual")
+            promise.resolve(null)
+        } catch (t: Throwable) {
+            promise.reject("MEMORY_SNAPSHOT_FAILED", describeThrowable(t), t)
         }
     }
 
@@ -170,6 +195,8 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
         val requestId = options.getStringOrNull("requestId") ?: "req_${System.currentTimeMillis()}"
         val temperature = options.getDoubleOrDefault("temperature", 0.4).toFloat()
         val topK = options.getIntOrDefault("topK", 40)
+        val backend = parseBackend(options.getStringOrNull("backend"))
+        val maxTokens = options.getIntOrDefault("maxTokens", 2048)
 
         val job = scope.launch {
             val started = System.currentTimeMillis()
@@ -181,11 +208,14 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
                 }
 
                 val safeName = requireFilename(filename)
+                Log.i(tag, "generate requestId=$requestId promptLen=${prompt.length} backend=$backend maxTokens=$maxTokens")
                 val text = withContext(Dispatchers.IO) {
                     GemmaEngineHolder.runExclusive {
                         val engine = GemmaEngineHolder.ensureEngine(
                             reactApplicationContext,
-                            downloader.targetFile(safeName).absolutePath
+                            downloader.targetFile(safeName).absolutePath,
+                            backend,
+                            maxTokens
                         )
                         val session = GemmaEngineHolder.newSession(engine, topK, temperature, enableAudio = false)
                         session.use {
@@ -194,10 +224,17 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
                         }
                     }
                 }
-                promise.resolve(buildGenerationResult(text, null, System.currentTimeMillis() - started))
+                val elapsed = System.currentTimeMillis() - started
+                Log.i(tag, "generate done requestId=$requestId elapsedMs=$elapsed outLen=${text.length}")
+                // Dump first 400 chars of model output to logcat so we can
+                // verify whether the model produced parseable JSON / XML.
+                // Trim newlines since logcat splits messages on \n.
+                val preview = text.replace("\n", " \\n ").take(400)
+                Log.i(tag, "generate output preview requestId=$requestId | $preview")
+                promise.resolve(buildGenerationResult(text, null, elapsed))
             } catch (t: Throwable) {
-                Log.w(tag, "generate failed", t)
-                promise.reject("GENERATE_FAILED", t.message ?: "generate failed", t)
+                Log.e(tag, "generate failed requestId=$requestId", t)
+                promise.reject("GENERATE_FAILED", describeThrowable(t), t)
             } finally {
                 activeJobs.remove(requestId)
             }
@@ -211,6 +248,8 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
         val requestId = options.getStringOrNull("requestId") ?: "audio_${System.currentTimeMillis()}"
         val temperature = options.getDoubleOrDefault("temperature", 0.4).toFloat()
         val topK = options.getIntOrDefault("topK", 40)
+        val backend = parseBackend(options.getStringOrNull("backend"))
+        val maxTokens = options.getIntOrDefault("maxTokens", 2048)
 
         val job = scope.launch {
             val started = System.currentTimeMillis()
@@ -223,11 +262,14 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
 
                 val safeName = requireFilename(filename)
                 val audioBytes = readAudioFile(audioFilePath)
+                Log.i(tag, "generateWithAudio requestId=$requestId audioBytes=${audioBytes.size} backend=$backend maxTokens=$maxTokens")
                 val text = withContext(Dispatchers.IO) {
                     GemmaEngineHolder.runExclusive {
                         val engine = GemmaEngineHolder.ensureEngine(
                             reactApplicationContext,
-                            downloader.targetFile(safeName).absolutePath
+                            downloader.targetFile(safeName).absolutePath,
+                            backend,
+                            maxTokens
                         )
                         val session = GemmaEngineHolder.newSession(engine, topK, temperature, enableAudio = true)
                         session.use {
@@ -237,10 +279,12 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
                         }
                     }
                 }
-                promise.resolve(buildGenerationResult(text, null, System.currentTimeMillis() - started))
+                val elapsed = System.currentTimeMillis() - started
+                Log.i(tag, "generateWithAudio done requestId=$requestId elapsedMs=$elapsed outLen=${text.length}")
+                promise.resolve(buildGenerationResult(text, null, elapsed))
             } catch (t: Throwable) {
-                Log.w(tag, "generateWithAudio failed", t)
-                promise.reject("GENERATE_AUDIO_FAILED", t.message ?: "audio generate failed", t)
+                Log.e(tag, "generateWithAudio failed requestId=$requestId", t)
+                promise.reject("GENERATE_AUDIO_FAILED", describeThrowable(t), t)
             } finally {
                 activeJobs.remove(requestId)
             }
@@ -317,4 +361,31 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
 
     private fun ReadableMap.getDoubleOrDefault(key: String, defaultValue: Double): Double =
         if (hasKey(key) && !isNull(key)) getDouble(key) else defaultValue
+
+    // ----- Backend & error helpers -------------------------------------------
+
+    private fun parseBackend(value: String?): GemmaEngineHolder.BackendPref =
+        when (value?.uppercase()) {
+            "CPU" -> GemmaEngineHolder.BackendPref.CPU
+            "GPU" -> GemmaEngineHolder.BackendPref.GPU
+            else -> GemmaEngineHolder.BackendPref.AUTO
+        }
+
+    /**
+     * Build a short, human-readable error message that includes the root cause
+     * chain. MediaPipe native crashes often surface as a generic
+     * "Internal error" — walking the cause chain recovers the original OOM
+     * or GPU-compilation message for the JS side.
+     */
+    private fun describeThrowable(t: Throwable): String {
+        val sb = StringBuilder(t.message ?: t.javaClass.simpleName)
+        var cause = t.cause
+        var depth = 0
+        while (cause != null && depth < 4) {
+            sb.append(" ← ").append(cause.message ?: cause.javaClass.simpleName)
+            cause = cause.cause
+            depth++
+        }
+        return sb.toString()
+    }
 }

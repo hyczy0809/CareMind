@@ -176,6 +176,9 @@ dependencies {
 
     // CareMind: on-device LLM inference (Gemma .litertlm / .task via MediaPipe).
     // Used only when the user opts into 隐私模式 (privacy mode) in settings.
-    implementation 'com.google.mediapipe:tasks-genai:0.10.27'
+    // NOTE: 0.10.35+ is required for Gemma 4 `.litertlm` files — older
+    // versions abort with `Unknown model type: tf_lite_audio_adapter` when
+    // they hit the audio modality block embedded in the bundle.
+    implementation 'com.google.mediapipe:tasks-genai:0.10.35'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }

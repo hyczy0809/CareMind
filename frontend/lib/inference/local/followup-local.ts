@@ -13,6 +13,9 @@ import { Gemma } from "./gemma-native";
 import { ensureEngine } from "./model-manager";
 import { parseJsonObject, coerceString, coerceStringArray } from "./json-extract";
 import { buildFollowupPrompt, type LocalFollowupJson } from "./prompts";
+import { buildFollowupXmlPrompt, type LocalFollowupXml } from "./prompts-xml";
+import { parseFollowupXml } from "./xml-parsers";
+import { isXmlOutput, LOCAL_OUTPUT_FORMAT } from "./format-config";
 import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, DEFAULT_TOP_K } from "./constants";
 import { reportOnDeviceInference } from "./telemetry";
 
@@ -77,6 +80,30 @@ function buildFallback(input: FollowupSummaryInput): {
   };
 }
 
+/**
+ * Re-shape an XML follow-up parse into the snake_case `LocalFollowupJson`
+ * the existing assembly logic consumes. Keeps the two paths converged.
+ */
+function xmlFollowupToJsonShape(xml: LocalFollowupXml): LocalFollowupJson {
+  return {
+    metrics: xml.metrics?.map((m) => ({
+      label: m.label,
+      value: m.value,
+      helper: m.helper,
+      tone: m.tone
+    })),
+    followup_patch: xml.followupPatch
+      ? {
+          summary_bullets: xml.followupPatch.summaryBullets,
+          doctor_questions: xml.followupPatch.doctorQuestions,
+          materials_to_bring: xml.followupPatch.materialsToBring
+        }
+      : undefined,
+    tried_strategies: xml.triedStrategies,
+    boundary_notice: xml.boundaryNotice
+  };
+}
+
 export async function generateFollowupSummaryLocal(
   input: FollowupSummaryInput
 ): Promise<FollowupSummaryResponse> {
@@ -89,13 +116,22 @@ export async function generateFollowupSummaryLocal(
 
   try {
     filename = await ensureEngine();
-    const prompt = buildFollowupPrompt({
-      dateRange: input.dateRange,
-      recordCount: input.recordCount,
-      attentionItems: input.attentionItems,
-      memoryItems: input.memoryItems,
-      followupDocuments: input.followupDocuments ?? []
-    });
+    const xmlMode = isXmlOutput();
+    const prompt = xmlMode
+      ? buildFollowupXmlPrompt({
+          dateRange: input.dateRange,
+          recordCount: input.recordCount,
+          attentionItems: input.attentionItems,
+          memoryItems: input.memoryItems,
+          followupDocuments: input.followupDocuments ?? []
+        })
+      : buildFollowupPrompt({
+          dateRange: input.dateRange,
+          recordCount: input.recordCount,
+          attentionItems: input.attentionItems,
+          memoryItems: input.memoryItems,
+          followupDocuments: input.followupDocuments ?? []
+        });
     inputChars = prompt.length;
     const result = await Gemma.generate(prompt, {
       filename,
@@ -104,8 +140,14 @@ export async function generateFollowupSummaryLocal(
       topK: DEFAULT_TOP_K
     });
     outputChars = result.text.length;
-    parsed = parseJsonObject<LocalFollowupJson>(result.text);
-    if (!parsed) errorKind = "json_parse_failed";
+
+    if (xmlMode) {
+      const xml = parseFollowupXml(result.text);
+      parsed = xml ? xmlFollowupToJsonShape(xml) : null;
+    } else {
+      parsed = parseJsonObject<LocalFollowupJson>(result.text);
+    }
+    if (!parsed) errorKind = `${LOCAL_OUTPUT_FORMAT}_parse_failed`;
   } catch (error) {
     console.warn("[local] generateFollowupSummary Gemma failure, falling back", error);
     errorKind = error instanceof Error ? error.message.slice(0, 60) : "engine_error";

@@ -74,7 +74,26 @@ cp .env.production.example .env.production
 EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
 ```
 
-如果 release 构建没有配置 `EXPO_PUBLIC_CAREMIND_API_URL`，App 会明确提示“后端地址未配置”，不会误请求手机自己的 localhost。
+如果 release 构建没有配置 `EXPO_PUBLIC_CAREMIND_API_URL`，App 会明确提示"后端地址未配置"，不会误请求手机自己的 localhost。
+
+### 端侧推理输出格式
+
+隐私模式下的所有本地 LLM 任务（结构化日志、护栏、复诊摘要）都需要把模型自由文本解析成应用消费的结构化数据。1B–4B 参数级别的设备端模型对严格 JSON 语法不够稳定（容易缺引号、漏逗号、未闭合字符串），所以默认走 **XML 标签格式**：
+
+```bash
+# 默认即 xml，无需显式设置
+EXPO_PUBLIC_LOCAL_OUTPUT_FORMAT=xml npm run android:usb
+
+# 紧急情况下回退到 JSON（用于 A/B 对照或排查 XML 解析回归）
+EXPO_PUBLIC_LOCAL_OUTPUT_FORMAT=json npm run android:usb
+```
+
+两条路径并存：
+
+- `lib/inference/local/prompts.ts` 与 `lib/inference/local/json-extract.ts` 实现 JSON 路径
+- `lib/inference/local/prompts-xml.ts`、`lib/inference/local/xml-extract.ts`、`lib/inference/local/xml-parsers.ts` 实现 XML 路径
+- 三个任务文件（`care-workflow-local.ts`、`guardrail-local.ts`、`followup-local.ts`）按 `isXmlOutput()` 在运行时分流，XML 解析结果会被 `xmlToJsonShape` 适配回 JSON 形状，复用既有的归一化与回退逻辑
+- 任意一种格式解析失败时，`fallback-builders` 走 regex 兜底，应用不会因此白屏
 
 ## 主要文件
 
