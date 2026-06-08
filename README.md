@@ -170,6 +170,36 @@ iPhone 输入或录音
 
 详细设计见：[docs/ios-edge-architecture.md](docs/ios-edge-architecture.md)
 
+### Agent 架构
+
+CareMind 云端采用 **1 个 Root Orchestrator + 5 个 Specialist Agents** 的结构；Memory Router、Memory Update、Knowledge Retrieval 和 Guardrail 是工作流模块，不单独算成对话 Agent。
+
+| Agent | 数量 | 职责 |
+|---|---:|---|
+| `caremind_cloud_root_agent` | 1 | 总调度器，判断任务、编排子 Agent、统一输出非诊断性照护建议 |
+| `event_structuring_agent` | 1 | 把自然语言照护记录抽取成结构化事件，并写入 Episodic Memory |
+| `patient_risk_agent` | 1 | 结合近期事件、行为基线和安全规则生成非诊断性今日关注提示 |
+| `caregiver_support_agent` | 1 | 识别照护者睡眠不足、压力和耗竭线索，生成支持建议 |
+| `care_plan_agent` | 1 | 把关注卡片、患者偏好、历史有效方法和知识库转成低负担行动计划 |
+| `doctor_summary_agent` | 1 | 调用长期 Memory 生成近 7 天 / 30 天复诊摘要和问题清单 |
+
+所以代码里的显式 ADK Agent 一共 **6 个**。完整定义见：[my_agent/cloud_agents.py](my_agent/cloud_agents.py)。
+
+工作流顺序：
+
+```text
+用户记录
+-> Root Orchestrator
+-> Event Structuring Agent
+-> Memory Router / Knowledge Retrieval
+-> Patient Risk Agent
+-> Caregiver Support Agent
+-> Care Plan Agent
+-> Memory Update / Guardrail
+-> Doctor Summary Agent
+-> 前端结构化展示
+```
+
 核心接口：
 
 ```http
