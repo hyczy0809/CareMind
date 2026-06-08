@@ -91,12 +91,46 @@ In the current Android MVP:
 - **Gemma 3 1B** is the recommended privacy-mode model for the hardware demo. It is small enough for ordinary Android phones and is used for on-device care-note understanding and suggestion generation.
 - **Gemma 4 E2B / E4B** remain optional larger experiments, but they are not the default because they can exceed memory limits and crash on many real phones.
 - **Cloud mode** uses an OpenAI-compatible API route for the full agent workflow and knowledge-backed responses.
+- **Cloud Agent tool calling** is implemented through Google ADK agents and an OpenAI-compatible model adapter. `my_agent/cloud_agents.py` registers care and memory tools, while `my_agent/cloudflare_openai_model.py` converts those function declarations into `tools` / `tool_choice: auto` payloads and maps returned `tool_calls` back into ADK function calls.
 - **Voice input** currently uses Android system speech recognition to turn speech into editable text. Local Gemma audio transcription is feature-flagged off until the native audio path is stable.
 - The Edge AI demo model currently served by the backend is `Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm` (`.litertlm`, about 557 MB).
 - The APK loads its downloadable model list from `GET /api/models`; the Cloud Run backend scans Google Cloud Storage dynamically, so adding a new model does not require rebuilding the APK.
 - Model files should live in Google Cloud Storage or Git LFS, not normal Git history.
 
 This split lets CareMind demonstrate both a practical cloud Agent workflow and a privacy-oriented on-device path for sensitive family-care data.
+
+### Native Function Calling / Tool Calling
+
+CareMind's C-track primary path is Edge AI on Android. Native Function Calling is demonstrated in the optional cloud Agent path, not in the offline LiteRT path.
+
+The cloud root agent can call tools such as:
+
+- `run_cloud_care_workflow`
+- `extract_care_signals`
+- `assess_patient_risk`
+- `assess_caregiver_burden`
+- `create_care_plan`
+- `retrieve_patient_profile`
+- `retrieve_recent_events`
+- `generate_doctor_summary`
+
+Minimal request:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: demo-session" \
+  -d '{
+    "model": "my_agent",
+    "messages": [
+      {
+        "role": "user",
+        "content": "妈妈昨晚起来四次，一直说有人偷钱，晚饭只吃了几口。我也快撑不住了。"
+      }
+    ],
+    "stream": false
+  }'
+```
 
 ## Edge AI Hardware Demo
 
