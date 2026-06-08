@@ -69,7 +69,7 @@ CareMind 的目标不是替医生判断病情，而是帮助家属把这些混�
 | 照护负担 | CareMind 输出 |
 |---|---|
 | 说不清今天发生了什么 | 结构化照护日志 |
-| 不知道今晚先做什么 | 今日关注事项 + 低负担行动 |
+| 不知道今天先做什么 | 今日关注事项 + 低负担行动 |
 | 和患者沟通冲突 | 低冲突沟通话术 |
 | 复诊时回忆不清 | 近 7 天 / 30 天复诊摘要 |
 | 记录太私密 | Android 端侧隐私模式 |
@@ -146,22 +146,6 @@ GET  /api/models
 GET  /api/models/{filename}
 POST /v1/chat/completions
 ```
-
-## 当前完成度
-
-| 能力 | 状态 |
-|---|---|
-| Cloud Run 后端 | 已完成 |
-| `/api/care-workflow` | 已完成 |
-| `/api/reports/follow-up` | 已完成 |
-| `/api/models` 动态模型目录 | 已完成 |
-| Android 原生 Gemma bridge | 可演示 |
-| Gemma 3 1B LiteRT Android 隐私模式 | 可演示 |
-| Gemma 4 E2B/E4B Android 模型路径 | 已支持路径 / 实验性 |
-| 完全离线 Android 推理 | 可演示 / 实验性 |
-| 云端 Agent Tool Calling | 已完成 |
-| 医生协作端 | 未来计划 |
-| 临床验证 | 不在本次范围 |
 
 ## 运行方式
 
