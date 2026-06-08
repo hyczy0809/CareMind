@@ -11,6 +11,10 @@ CareMind is a dementia family-care navigation app that helps caregivers turn mes
 
 It is built for family caregivers, not clinicians. CareMind does not diagnose, prescribe, decide medical tests, or replace emergency help.
 
+## Team
+
+CareMind Team: 张媛、连婕妤、刘畅、郭鸿宇
+
 ## At A Glance
 
 | What it does | Why it matters |
