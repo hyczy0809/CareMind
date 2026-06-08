@@ -8,17 +8,13 @@
 ![Safety](https://img.shields.io/badge/safety-non--diagnostic-476F92)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-参赛组名：**CareMind Team**　｜　正式项目名称：**CareMind 失智症家庭照护 Agent**
+正式项目名称：**CareMind 失智症家庭照护 Agent**
 
 面向失智症家庭照护场景的 AI Care Agent。CareMind 以 Gemma-family 模型能力为核心，演示家庭照护记录结构化、今日风险关注、低冲突沟通话术、复诊摘要整理，以及 Android 端侧隐私模式。项目不诊断、不处方、不判断是否需要检查，也不替代医生或急救服务。
 
 ## 1. 项目名称
 
 正式项目名称：**CareMind 失智症家庭照护 Agent**
-
-参赛组名：**CareMind Team**
-
-团队成员：张媛、连婕妤、刘畅、郭鸿宇
 
 参赛赛道：**赛道 C：Edge AI / Android 端侧 AI**
 
