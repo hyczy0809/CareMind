@@ -24,6 +24,8 @@ CareMind 前端 MVP，基于 `CareMind_Frontend_Design_v0.2.md` 实现。
 - 复诊摘要一键生成可复制文本
 - 设置页核心事件审计
 - 医疗边界前置提示文案
+- iPhone 云端版：支持完整 App、云端 Agent 工作流、资料上传与录音上传转写
+- Android 隐私模式：支持 Gemma LiteRT 端侧模型演示
 
 ## 运行方式
 
@@ -51,6 +53,45 @@ npm run web
 npm run typecheck
 ```
 
+### iPhone / iOS 端
+
+iPhone 端当前支持完整 CareMind App 与云端 Agent 工作流：
+
+- 今日照护
+- 智能记录
+- 复诊准备
+- 资料上传
+- 录音上传转写
+- 沟通话术与照护建议
+
+边界说明：iPhone 端暂不承诺本地 Gemma LiteRT 推理。C 赛道的端侧模型演示仍以 Android 真机为主；iPhone 端会走已部署的 Cloud Run 后端。
+
+本地 iOS 模拟器运行：
+
+```bash
+EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app npm run ios:cloud
+```
+
+如果 iOS 模拟器需要连接本地后端：
+
+```bash
+EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run ios:local
+```
+
+真机 / TestFlight / 内部分发建议使用 EAS：
+
+```bash
+npm install -g eas-cli
+eas login
+eas build -p ios --profile preview
+```
+
+如需只构建 iOS 模拟器包：
+
+```bash
+eas build -p ios --profile ios-simulator
+```
+
 ### 后端地址配置
 
 Web 和 USB 真机调试可以继续使用本机后端：
@@ -66,12 +107,13 @@ adb reverse tcp:8090 tcp:8090
 npm run android:usb
 ```
 
-正式 APK 不应该绑定 `127.0.0.1`。发布前需要把已部署的 HTTPS 后端写入构建环境：
+正式移动端安装包不应该绑定 `127.0.0.1`。发布前需要把已部署的 HTTPS 后端写入构建环境：
 
 ```bash
 cp .env.production.example .env.production
 # 把 https://your-caremind-api.example.com 改成真实部署地址
 EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run android:release
+EXPO_PUBLIC_CAREMIND_API_URL=https://api.your-domain.com npm run ios:release
 ```
 
 如果 release 构建没有配置 `EXPO_PUBLIC_CAREMIND_API_URL`，App 会明确提示"后端地址未配置"，不会误请求手机自己的 localhost。

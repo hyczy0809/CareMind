@@ -22,7 +22,7 @@ export const REQUEST_TIMEOUT_MS = 12000;
 export function requireApiBaseUrl(): string {
   if (!API_BASE_URL) {
     throw new Error(
-      "CareMind 后端地址未配置。发布 APK 前请设置 EXPO_PUBLIC_CAREMIND_API_URL 为已部署的 HTTPS 后端地址。"
+      "CareMind 后端地址未配置。发布移动端安装包前请设置 EXPO_PUBLIC_CAREMIND_API_URL 为已部署的 HTTPS 后端地址。"
     );
   }
   return API_BASE_URL;

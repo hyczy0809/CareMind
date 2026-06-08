@@ -6,6 +6,9 @@
   "scripts": {
     "start": "expo start",
     "ios": "expo run:ios",
+    "ios:cloud": "EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app expo run:ios",
+    "ios:local": "EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 expo run:ios",
+    "ios:release": "EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app expo run:ios --configuration Release",
     "android": "expo run:android",
     "android:usb": "EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 expo run:android",
     "android:release": "expo run:android --variant release",

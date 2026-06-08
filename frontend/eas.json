@@ -1,0 +1,34 @@
+{
+  "cli": {
+    "version": ">= 14.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_CAREMIND_API_URL": "https://caremind-1039168666325.us-west1.run.app"
+      }
+    },
+    "ios-simulator": {
+      "ios": {
+        "simulator": true
+      },
+      "env": {
+        "EXPO_PUBLIC_CAREMIND_API_URL": "https://caremind-1039168666325.us-west1.run.app"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_CAREMIND_API_URL": "https://caremind-1039168666325.us-west1.run.app"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_CAREMIND_API_URL": "https://caremind-1039168666325.us-west1.run.app"
+      }
+    }
+  }
+}

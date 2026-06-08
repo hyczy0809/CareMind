@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Check, Cpu, Download, ShieldCheck, Trash2, X } from "lucide-react-native";
 import { Button } from "../ui/Button";
 import { colors, hitSlop, radius, typography } from "../../lib/theme";
@@ -78,6 +78,9 @@ export function PrivacyModeCard() {
   const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const localInferenceAvailable = GEMMA_NATIVE_AVAILABLE;
+  const visiblePrivacyOn = localInferenceAvailable ? privacyOn : false;
+  const unsupportedPlatformLabel = Platform.OS === "ios" ? "iPhone" : Platform.OS === "web" ? "Web" : "当前平台";
 
   useEffect(() => subscribeManager(setManager), []);
 
@@ -100,6 +103,7 @@ export function PrivacyModeCard() {
   }, [reloadCatalog]);
 
   const showBanner =
+    localInferenceAvailable &&
     privacyOn &&
     selectedId !== null &&
     (manager.byModel[selectedId]?.status !== "ready") &&
@@ -113,11 +117,17 @@ export function PrivacyModeCard() {
         </View>
         <View style={styles.headerText}>
           <Text style={styles.title}>隐私模式</Text>
-          <Text style={styles.subtitle}>开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。</Text>
+          <Text style={styles.subtitle}>
+            {localInferenceAvailable
+              ? "开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。"
+              : `${unsupportedPlatformLabel} 端支持完整 App 与云端 Agent 工作流；本地 Gemma 推理目前仅 Android 真机可用。`}
+          </Text>
         </View>
         <Switch
-          value={privacyOn}
+          value={visiblePrivacyOn}
+          disabled={!localInferenceAvailable}
           onValueChange={(value) => {
+            if (!localInferenceAvailable) return;
             void setPrivacy(value);
           }}
           trackColor={{ false: colors.border.subtle, true: colors.brand.primary }}
@@ -135,7 +145,7 @@ export function PrivacyModeCard() {
 
       {!GEMMA_NATIVE_AVAILABLE ? (
         <Text style={styles.helper}>
-          目前只在 Android 真机上提供本地推理。Web / iOS / 模拟器仍走云端。
+          {unsupportedPlatformLabel} 端可以使用智能记录、今日照护、复诊准备、资料上传和语音录音上传转写；端侧 Gemma LiteRT 隐私模式目前保留给 Android 真机演示。
         </Text>
       ) : (
         <>

@@ -10,7 +10,7 @@
 
 ## 评委速览
 
-CareMind 是一个面向失智症家庭照护者的 Android Edge AI Care Agent。它把家属零散的照护记录整理成结构化日志、今日行动、沟通话术、照护者支持和复诊摘要，并通过端侧 Gemma LiteRT 模型让敏感记录优先留在本机处理。
+CareMind 是一个面向失智症家庭照护者的 AI Care Agent。它把家属零散的照护记录整理成结构化日志、今日行动、沟通话术、照护者支持和复诊摘要。当前 iPhone 端支持完整 App 与云端 Agent 工作流；C 赛道核心演示聚焦 Android 端侧 Gemma LiteRT，让敏感记录优先留在本机处理。
 
 为什么是 C 赛道：失智症照护里最敏感的信息常常发生在家里和深夜，包括患者状态、家庭压力、用药观察和照护者崩溃时刻。CareMind 的核心 Edge AI 价值是：这些记录不应默认全部上传云端，而应支持在 Android 设备上优先本地理解。
 
@@ -58,6 +58,12 @@ Android App -> 设置 / 隐私模式 -> 刷新模型目录 -> 下载 Gemma LiteR
 -> 关闭网络 -> 输入敏感照护记录 -> 本机生成非诊断性照护理解与建议
 ```
 
+**iPhone 端验证**
+
+```text
+iPhone / iOS Simulator -> Cloud Run 后端 -> 智能记录、今日照护、复诊准备、资料上传、录音上传转写
+```
+
 ## 为什么做 CareMind
 
 失智症家庭照护的难点不是只发生在诊室里。家属每天要记住夜间起床、拒药、少食、怀疑东西被偷、反复要回家、情绪激动和自己的疲惫。复诊时，医生需要的是清楚的近期变化，但家属常常只能依靠记忆和碎片聊天记录。
@@ -74,6 +80,7 @@ CareMind 的目标不是替医生判断病情，而是帮助家属把这些混�
 | 复诊时回忆不清 | 近 7 天 / 30 天复诊摘要 |
 | 记录太私密 | Android 端侧隐私模式 |
 | 照护者快撑不住 | 压力识别 + 支援提醒 |
+| iPhone 用户需要使用 App | iOS 云端 Agent 版 |
 
 产品闭环：
 
@@ -113,10 +120,11 @@ Edge AI 证据：
 |---|---|---|---|
 | Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | 可演示 | 敏感照护记录本地理解与建议生成 |
 | Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | 已支持路径 / 实验性 | 通过动态模型目录支持，真机稳定性取决于设备内存 |
+| iPhone / iOS 云端版 | Cloud Run Agent workflow | 已支持 | 完整 App 体验、资料上传、录音上传转写 |
 | 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 完整工作流、摘要、工具调用 |
 | 稳定性兜底 | deterministic parser / fallback builders | 已完成 | 保证 Demo 不因小模型输出不完整而中断 |
 
-不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。
+不要混淆：当前真机端侧演示默认使用 Gemma 3 1B LiteRT；Gemma 4 E2B/E4B 是已预留动态目录支持的更大候选模型，不作为普通手机上的默认稳定模型承诺。iPhone 端当前走云端 Agent，不承诺本地 Gemma LiteRT 推理。
 
 ## 架构设计
 
@@ -169,6 +177,29 @@ EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app npm
 
 ```text
 http://127.0.0.1:8082
+```
+
+### iPhone / iOS 云端版
+
+```bash
+cd frontend
+npm install
+EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app npm run ios:cloud
+```
+
+iOS 模拟器连接本地后端：
+
+```bash
+EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run ios:local
+```
+
+EAS 内部分发：
+
+```bash
+cd frontend
+npm install -g eas-cli
+eas login
+eas build -p ios --profile preview
 ```
 
 ### 本地后端 + 前端
@@ -235,16 +266,19 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 1. **Android 端侧隐私模式**
    代码：[frontend/android/app/src/main/java/com/caremind/app/gemma](frontend/android/app/src/main/java/com/caremind/app/gemma)
 
-2. **本地 / 云端推理路由**
+2. **iPhone 云端 Agent 版**
+   配置：[frontend/app.json](frontend/app.json), [frontend/eas.json](frontend/eas.json)
+
+3. **本地 / 云端推理路由**
    代码：[frontend/lib/inference/inference-router.ts](frontend/lib/inference/inference-router.ts)
 
-3. **动态模型目录**
+4. **动态模型目录**
    代码：[frontend/lib/inference/local/model-catalog.ts](frontend/lib/inference/local/model-catalog.ts), [main.py](main.py)
 
-4. **云端 Agent Tool Calling**
+5. **云端 Agent Tool Calling**
    代码：[my_agent/cloud_agents.py](my_agent/cloud_agents.py), [my_agent/cloudflare_openai_model.py](my_agent/cloudflare_openai_model.py)
 
-5. **结构化产品数据，而不是纯聊天输出**
+6. **结构化产品数据，而不是纯聊天输出**
    代码：[frontend/lib/inference/local/xml-parsers.ts](frontend/lib/inference/local/xml-parsers.ts), [my_agent/care_workflow_service.py](my_agent/care_workflow_service.py)
 
 ## 安全与隐私边界
@@ -271,6 +305,7 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 | 前端说明 | [frontend/README.md](frontend/README.md) |
 | Demo 分镜 | [docs/demo-video/demo_storyboard.md](docs/demo-video/demo_storyboard.md) |
 | 录制指南 | [docs/demo-video/recording_guide.md](docs/demo-video/recording_guide.md) |
+| iOS / EAS 构建配置 | [frontend/eas.json](frontend/eas.json) |
 | 后端入口 | [main.py](main.py) |
 | OpenAI-compatible Agent 路由 | [openai_compat.py](openai_compat.py) |
 | Agent / Memory 工作流 | [my_agent](my_agent) |
