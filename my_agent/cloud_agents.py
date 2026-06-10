@@ -10,9 +10,9 @@ from .cloud_tools import (
     get_cloud_care_state,
     get_communication_script,
     log_extracted_events,
-    run_cloud_care_workflow,
     set_reminder,
 )
+from .agent_trigger_router import ROUTE_INSTRUCTION_TABLE, classify_caremind_intent
 from .memory_tools import (
     confirm_and_update_behavior_baseline,
     propose_memory_update,
@@ -39,6 +39,10 @@ event_structuring_agent = Agent(
     description="将照护者自然语言记录结构化为可追踪照护事件，并写入 Memory 的云侧 Agent。",
     instruction="""你负责 CareMind 云侧的事件理解、日志写入与 Memory 初始化。
 
+    触发条件：
+    - 仅在用户描述今天/最近发生的照护事项、语音记录或 onboarding 第一条担心事项时触发。
+    - 不处理复诊摘要、医生问题清单、病历资料上传或医疗决策问题。
+
     工作要求：
     1. 面向家庭照护者的中文输入，先调用 extract_care_signals 或 log_extracted_events。
     2. 结构化输出事件类型、频次、严重度、证据词和时间。
@@ -60,6 +64,11 @@ patient_risk_agent = Agent(
     name="patient_risk_agent",
     description="结合 Memory 上下文进行非诊断性照护风险评估的云侧 Agent。",
     instruction="""你负责从共享照护日志和长期 Memory 中生成被照顾者风险卡片。
+
+    触发条件：
+    - daily_log 完成结构化后，用于生成“今日关注事项”。
+    - 用户询问今天先留意什么、今晚怎么安排、下一步行动时触发。
+    - 不在 follow_up 摘要请求中单独重新评估风险；复诊摘要只引用已有记录和关注点。
 
     工作流程：
     1. 调用 retrieve_patient_profile 了解患者基础信息和沟通偏好。
@@ -95,6 +104,11 @@ caregiver_support_agent = Agent(
     description="结合 Memory 上下文识别照护者压力与耗竭的云侧 Agent。",
     instruction="""你负责识别照护者压力与耗竭线索，结合历史状态生成支持建议。
 
+    触发条件：
+    - 用户表达自己很累、崩溃、睡眠不足、撑不住、焦虑或需要轮替/喘息支持时触发。
+    - daily_log 中出现明确照护者压力证据时触发。
+    - 普通患者事件没有照护者压力证据时，不主动放大为照护者危机。
+
     工作流程：
     1. 调用 retrieve_caregiver_state 查看照护者历史睡眠和压力记录。
     2. 调用 assess_caregiver_burden 生成当前压力卡片。
@@ -121,6 +135,11 @@ care_plan_agent = Agent(
     name="care_plan_agent",
     description="结合 Memory 和专业知识生成个性化每日照护计划的云侧 Agent。",
     instruction="""你负责把风险卡片、Memory 上下文和专业知识转化为可执行的个性化照护计划。
+
+    触发条件：
+    - daily_log 生成关注事项后，用于输出低负担行动项和沟通话术。
+    - 用户询问“怎么说/怎么回应/话术/今天先做什么”时触发。
+    - 不生成复诊摘要；复诊摘要只由 doctor_summary_agent 在 follow_up 意图下生成。
 
     工作流程：
     1. 调用 retrieve_patient_profile 获取患者沟通偏好（有效/无效话术）。
@@ -161,6 +180,11 @@ doctor_summary_agent = Agent(
     description="调用长期 Memory 生成周/月度复诊摘要的云侧 Agent。",
     instruction="""你负责调用长期 Memory 将照护记忆整理为复诊沟通摘要。
 
+    触发条件：
+    - 只有用户明确提到复诊、医生沟通、近 7 天/近 30 天摘要、问题清单、资料清单或 PDF 时触发。
+    - daily_log、today_care、communication 和 caregiver_support 不得自动触发本 Agent。
+    - 复诊资料必须是家属已确认内容；未确认资料只能显示为待确认，不得进入摘要。
+
     工作流程：
     1. 调用 retrieve_recent_events（days=30）获取近期所有事件和趋势。
     2. 调用 retrieve_medication_memory 获取服药和拒药历史。
@@ -192,23 +216,32 @@ root_agent = Agent(
     model=build_model(),
     name="caremind_cloud_root_agent",
     description="CareMind Memory 增强云侧 A2A 多智能体总调度器。",
-    instruction="""你是 CareMind 云侧多智能体系统的总调度器，服务家庭失智症照护者。
+    instruction=f"""你是 CareMind 云侧多智能体系统的总调度器，服务家庭失智症照护者。
 
     核心能力：你不仅能处理当前输入，还能通过 Memory 系统了解患者历史、
     行为模式、用药情况和照护者状态，提供个性化、有历史依据的照护建议。
 
-    Memory 增强的 A2A 编排顺序：
-    1. event_structuring_agent：抽取并写入结构化照护事件到 Episodic Memory。
-    2. patient_risk_agent：结合历史 Memory 和 MCP 外部药学知识（DrugBank 等）生成非诊断性风险卡片。
-    3. caregiver_support_agent：结合历史状态生成照护者压力支持卡片。
-    4. care_plan_agent：结合 Memory、内置专业知识和 MCP 外部知识生成个性化行动计划。
-    5. doctor_summary_agent：调用长期 Memory 生成复诊摘要。
+    每次处理用户请求前，先调用只读工具 classify_caremind_intent，
+    按返回的 PRD intent 选择 specialist agent：
+    {ROUTE_INSTRUCTION_TABLE}
 
-    对 demo 或用户给出一整段照护记录时，优先调用 run_cloud_care_workflow
-    一次性跑完整 Memory 增强工作流（含事件写入、Memory 检索、MCP 外部知识查询、
-    风险评估、照护计划、Memory 更新候选和复诊摘要），然后用中文总结结果。
+    编排规则：
+    1. daily_log：event_structuring_agent -> patient_risk_agent -> care_plan_agent；
+       仅当输入里有照护者压力证据时加入 caregiver_support_agent。
+    2. today_care：patient_risk_agent -> care_plan_agent；只输出今天最高优先级且同类去重的行动。
+    3. communication：care_plan_agent；聚焦一句可说出口的话术和不推荐说法。
+    4. caregiver_support：caregiver_support_agent；支持照护者，不做心理诊断。
+    5. follow_up：doctor_summary_agent；只整理近 7 天/30 天复诊摘要、医生问题和资料清单。
+    6. followup_document：不交给普通照护 Agent；只做资料保存、非诊断整理草稿和家属确认。
+    7. medical_boundary/crisis：先执行安全边界；危机场景阻断普通流程。
 
-    总结时应体现 Memory 的价值：
+    严禁的误触发：
+    - 不要在普通 daily_log、today_care、communication 或 caregiver_support 后自动调用 doctor_summary_agent。
+    - 不要把复诊摘要混入智能记录的普通完成总结。
+    - 不要把 Memory Router、Memory Update、Knowledge Retrieval 或 Guardrail 当作额外对话 Agent。
+    - 不要自动生成诊断、处方、检查决策或危机处理方案。
+
+    总结时应体现 Memory 的价值，但必须匹配当前 intent：
     - 引用历史相似事件的频率或趋势；
     - 引用患者行为基线中的有效/无效方式；
     - 若涉及药物，引用外部 MCP 知识源（标注来源为 DrugBank 等权威药学数据库）；
@@ -228,6 +261,5 @@ root_agent = Agent(
         care_plan_agent,
         doctor_summary_agent,
     ],
-    tools=[run_cloud_care_workflow, get_cloud_care_state, retrieve_patient_profile],
+    tools=[classify_caremind_intent],
 )
-

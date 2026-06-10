@@ -425,6 +425,7 @@ def run_cloud_care_workflow(
     note: str,
     patient_id: str = "demo_patient",
     caregiver_id: str = "demo_caregiver",
+    include_doctor_summary: bool = False,
 ) -> dict[str, Any]:
     """
     CareMind Memory 增强云侧工作流（对应 CareMind_Memory.md 第 8.2 节 + MCP 扩展）：
@@ -439,7 +440,11 @@ def run_cloud_care_workflow(
     Step 8.  照护计划生成 — create_care_plan
     Step 9.  更新照护者状态 Memory — update_caregiver_state
     Step 10. 提出长期 Memory 候选 + 门控分类 — propose_memory_update
-    Step 11. 复诊摘要生成 — generate_doctor_summary
+
+    PRD 6.2 触发边界：
+    - 默认用于 daily_log，不生成复诊摘要。
+    - 只有显式 follow_up 场景传入 include_doctor_summary=True 时，
+      才调用 generate_doctor_summary。
     """
     mt = _mem_tools()
     mr = _mem_router()
@@ -528,8 +533,12 @@ def run_cloud_care_workflow(
         classified.get("needs_confirmation", [])
     )
 
-    # ── Step 10: 复诊摘要 ──────────────────────────────────
-    doctor_summary = generate_doctor_summary(patient_id, "recent", True)
+    # ── Step 10: 复诊摘要（仅显式 follow_up 触发）────────────
+    doctor_summary = (
+        generate_doctor_summary(patient_id, "recent", True)
+        if include_doctor_summary
+        else None
+    )
 
     return {
         # 事件抽取

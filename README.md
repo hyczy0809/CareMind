@@ -269,17 +269,24 @@ CareMind 云端采用 **1 个 Root Orchestrator + 5 个 Specialist Agents**。Me
 云端工作流：
 
 ```text
-用户记录
+用户记录（daily_log）
 -> Root Orchestrator
 -> Event Structuring Agent
 -> Memory Router / Knowledge Retrieval
 -> Patient Risk Agent
--> Caregiver Support Agent
+-> Caregiver Support Agent（仅出现照护者压力线索时）
 -> Care Plan Agent
 -> Memory Update / Guardrail
--> Doctor Summary Agent
 -> 前端结构化展示
+
+复诊请求（follow_up）
+-> Root Orchestrator
+-> Doctor Summary Agent
+-> 近 7 天 / 30 天摘要、医生问题、资料清单
 ```
+
+普通智能记录不会自动触发 `doctor_summary_agent`；复诊摘要只在用户进入复诊准备、
+明确提到复诊/医生/近 7 天/30 天摘要，或调用 `/api/reports/follow-up` 时生成。
 
 核心接口：
 
