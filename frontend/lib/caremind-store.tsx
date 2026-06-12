@@ -74,6 +74,8 @@ interface CareMindContextValue {
   dismissMemory: (memoryId: string) => void;
   trackEvent: (name: AnalyticsEventName, properties?: AnalyticsEvent["properties"]) => void;
   loadDemoData: () => void;
+  /** True when running in a development build (__DEV__). */
+  isDev: boolean;
 }
 
 interface SaveLogOptions {
@@ -694,7 +696,8 @@ export function CareMindProvider({ children }: { children: ReactNode }) {
     confirmMemory,
     dismissMemory,
     trackEvent,
-    loadDemoData
+    loadDemoData,
+    isDev: !!__DEV__
   };
 
   return <CareMindContext.Provider value={value}>{children}</CareMindContext.Provider>;

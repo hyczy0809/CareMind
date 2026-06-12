@@ -74,7 +74,9 @@ export function parseJsonObject<T = unknown>(text: string): T | null {
     try {
       return JSON.parse(stripTrailingCommas(slice)) as T;
     } catch (error) {
-      console.warn("parseJsonObject failed", error, slice.slice(0, 200));
+      if (__DEV__) {
+        console.warn("parseJsonObject failed", error, slice.slice(0, 200));
+      }
       return null;
     }
   }

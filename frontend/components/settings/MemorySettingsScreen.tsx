@@ -127,7 +127,7 @@ export function MemorySettingsScreen() {
         </Card>
       )}
 
-      <SectionTitle title="核心事件" helper="仅本机保存，用于 demo 验收和调试" />
+      <SectionTitle title="核心事件" helper="仅本机保存" />
       {analyticsEvents.length > 0 ? (
         analyticsEvents.slice(0, 20).map((event) => (
           <Card key={event.id}>
