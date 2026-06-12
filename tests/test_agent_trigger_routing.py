@@ -80,6 +80,8 @@ class AgentTriggerRouterTests(unittest.TestCase):
         self.assertEqual(route["agents"], ["doctor_summary_agent"])
         self.assertTrue(route["allows_doctor_summary"])
         self.assertFalse(route["blocks_ordinary_workflow"])
+        self.assertEqual(route["model_routing"]["selected_model_profile"], "cloud_31b_long_context")
+        self.assertEqual(route["model_routing"]["normalized_intent"], "follow_up_summary")
 
 
 class CloudAgentConfigurationTests(unittest.TestCase):
@@ -180,6 +182,37 @@ class CloudWorkflowTriggerTests(unittest.TestCase):
 
         summary.assert_called_once_with("route_test_patient", "recent", True)
         self.assertEqual(result["doctor_summary"], {"ok": True})
+
+
+class CareWorkflowCommunicationScriptTests(unittest.TestCase):
+    def test_communication_script_is_present_for_general_daily_log(self):
+        from my_agent.care_workflow_service import build_communication_script, build_structured_log
+
+        log = build_structured_log(
+            "今天妈妈上午状态还可以，吃了早饭，下午有点累。",
+            [],
+            "2026-06-12T00:00:00+08:00",
+        )
+
+        script = build_communication_script("今天妈妈上午状态还可以，吃了早饭，下午有点累。", log)
+
+        self.assertIsNotNone(script)
+        self.assertEqual(script.scenario_type, "general_support")
+        self.assertTrue(script.recommended)
+        self.assertTrue(script.record_suggestion)
+
+    def test_communication_script_keeps_specific_home_seeking_copy(self):
+        from my_agent.care_workflow_service import build_communication_script, build_structured_log
+
+        note = "妈妈下午一直说要回老家，我不知道该怎么回应。"
+        log = build_structured_log(note, [], "2026-06-12T00:00:00+08:00")
+
+        script = build_communication_script(note, log)
+
+        self.assertIsNotNone(script)
+        self.assertEqual(script.scenario_type, "home_seeking")
+        self.assertIn("想家", script.recommended)
+        self.assertTrue(script.record_suggestion)
 
 
 if __name__ == "__main__":

@@ -24,8 +24,8 @@ object GemmaEngineHolder {
 
     private const val TAG = "CaremindGemmaEngine"
     private const val MAX_ENGINE_TOKENS = 768
-    private const val MAX_LOADABLE_MODEL_BYTES = 1_500_000_000L
-    private const val MIN_AVAILABLE_MEMORY_BYTES = 700_000_000L
+    private const val MAX_LOADABLE_MODEL_BYTES = 2_800_000_000L
+    private const val MIN_AVAILABLE_MEMORY_BYTES = 1_800_000_000L
 
     /** Backend preference passed in from JS. */
     enum class BackendPref { AUTO, CPU, GPU }
@@ -36,6 +36,8 @@ object GemmaEngineHolder {
     private val loadedPathRef = AtomicReference<String?>(null)
     /** Backend the loaded engine was built against. */
     private val loadedBackendRef = AtomicReference<BackendPref?>(null)
+    /** Actual MediaPipe backend selected after AUTO / fallback resolution. */
+    private val loadedRuntimeBackendRef = AtomicReference<String?>(null)
     /** Max tokens the loaded engine was built with. */
     private val loadedMaxTokensRef = AtomicReference<Int?>(null)
     private val generationLock = Any()
@@ -92,6 +94,7 @@ object GemmaEngineHolder {
                 engineRef.set(null)
                 loadedPathRef.set(null)
                 loadedBackendRef.set(null)
+                loadedRuntimeBackendRef.set(null)
                 loadedMaxTokensRef.set(null)
                 // Give the JVM a hint; native side controls its own heap, but
                 // releasing the JNI handle helps reclaim the off-heap arena sooner.
@@ -102,73 +105,132 @@ object GemmaEngineHolder {
             if (!file.exists() || file.length() <= 0) {
                 throw IllegalStateException("模型文件不存在或为空：$modelPath")
             }
+            validateModelFile(file)
             assertCanLoadModel(context.applicationContext, file)
             val fileSizeMb = file.length() / (1024 * 1024)
-            logMemorySnapshot(context, "Pre-load model=${file.name} size=${fileSizeMb}MB")
-
-            // Resolve backend. AUTO uses CPU for known-large models (>1.5 GB on disk)
-            // because GPU delegate on most phones cannot fit the full model in VRAM
-            // and will fall back / OOM mid-graph. Small models default to GPU.
-            val effectiveBackend = when (backend) {
-                BackendPref.CPU -> LlmInference.Backend.CPU
-                BackendPref.GPU -> LlmInference.Backend.GPU
-                BackendPref.AUTO -> if (fileSizeMb > 1500L) {
-                    Log.i(TAG, "AUTO backend → CPU (model size ${fileSizeMb}MB > 1500MB heuristic).")
-                    LlmInference.Backend.CPU
-                } else {
-                    Log.i(TAG, "AUTO backend → GPU (small model).")
-                    LlmInference.Backend.GPU
-                }
-            }
             Log.i(
                 TAG,
-                "Creating LlmInference engine: path=$modelPath backend=$effectiveBackend maxTokens=$effectiveMaxTokens"
+                "Model file resolved: path=${file.absolutePath} size=${fileSizeMb}MB readable=${file.canRead()} format=${file.extension}"
+            )
+            logMemorySnapshot(context, "Pre-load model=${file.name} size=${fileSizeMb}MB")
+
+            Log.i(
+                TAG,
+                "Creating LlmInference engine: path=$modelPath requestedBackend=$backend maxTokens=$effectiveMaxTokens"
             )
 
-            val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelPath)
-                .setMaxTokens(effectiveMaxTokens)
-                .setMaxTopK(64)
-                .setPreferredBackend(effectiveBackend)
-                .build()
-
             val startMs = System.currentTimeMillis()
-            val engine = try {
-                LlmInference.createFromOptions(context.applicationContext, options)
-            } catch (error: OutOfMemoryError) {
-                engineRef.set(null)
-                loadedPathRef.set(null)
-                loadedBackendRef.set(null)
-                loadedMaxTokensRef.set(null)
-                Log.e(TAG, "LlmInference.createFromOptions OOM — backend=$effectiveBackend", error)
-                logMemorySnapshot(context, "Post-oom")
-                throw IllegalStateException("端侧模型加载内存不足。请关闭其他应用后重试，或在隐私模式里切换到 Gemma 3 1B。", error)
-            } catch (error: Throwable) {
-                engineRef.set(null)
-                loadedPathRef.set(null)
-                loadedBackendRef.set(null)
-                loadedMaxTokensRef.set(null)
-                val reason = error.message ?: error.javaClass.simpleName
-                Log.e(TAG, "LlmInference.createFromOptions failed — backend=$effectiveBackend", error)
-                logMemorySnapshot(context, "Post-failure")
-                throw IllegalStateException("端侧模型加载失败：$reason", error)
-            }
+            val (engine, runtimeBackend) = createEngineWithFallback(
+                context = context.applicationContext,
+                modelPath = modelPath,
+                maxTokens = effectiveMaxTokens,
+                candidates = backendCandidates(backend, fileSizeMb)
+            )
             val elapsedMs = System.currentTimeMillis() - startMs
-            Log.i(TAG, "LlmInference engine ready in ${elapsedMs}ms (backend=$effectiveBackend).")
+            Log.i(TAG, "LlmInference engine ready in ${elapsedMs}ms (runtimeBackend=$runtimeBackend requestedBackend=$backend).")
             logMemorySnapshot(context, "Post-load engine ready")
 
             engineRef.set(engine)
             loadedPathRef.set(modelPath)
             loadedBackendRef.set(backend)
+            loadedRuntimeBackendRef.set(runtimeBackend.name)
             loadedMaxTokensRef.set(effectiveMaxTokens)
             return engine
         }
     }
 
+    private fun validateModelFile(file: File) {
+        val extension = file.extension.lowercase()
+        if (extension !in setOf("litertlm", "task")) {
+            throw IllegalArgumentException("模型格式不支持：.${file.extension}。Android 端当前只接受 .litertlm 或 .task。")
+        }
+        if (!file.canRead()) {
+            throw IllegalStateException("模型文件不可读：${file.absolutePath}")
+        }
+    }
+
+    private fun backendCandidates(
+        backend: BackendPref,
+        fileSizeMb: Long
+    ): List<LlmInference.Backend> =
+        when (backend) {
+            BackendPref.CPU -> listOf(LlmInference.Backend.CPU)
+            BackendPref.GPU -> listOf(LlmInference.Backend.GPU, LlmInference.Backend.CPU)
+            BackendPref.AUTO -> if (fileSizeMb > 1500L) {
+                Log.i(TAG, "AUTO backend -> CPU (model size ${fileSizeMb}MB > 1500MB heuristic).")
+                listOf(LlmInference.Backend.CPU)
+            } else {
+                Log.i(TAG, "AUTO backend -> GPU first, CPU fallback (model size ${fileSizeMb}MB).")
+                listOf(LlmInference.Backend.GPU, LlmInference.Backend.CPU)
+            }
+        }
+
+    private fun createEngineWithFallback(
+        context: Context,
+        modelPath: String,
+        maxTokens: Int,
+        candidates: List<LlmInference.Backend>
+    ): Pair<LlmInference, LlmInference.Backend> {
+        var lastError: Throwable? = null
+
+        for ((index, candidate) in candidates.withIndex()) {
+            val canRetry = index < candidates.lastIndex
+            val options = LlmInference.LlmInferenceOptions.builder()
+                .setModelPath(modelPath)
+                .setMaxTokens(maxTokens)
+                .setMaxTopK(64)
+                .setPreferredBackend(candidate)
+                .build()
+
+            try {
+                Log.i(TAG, "LlmInference.createFromOptions begin backend=$candidate path=$modelPath")
+                return LlmInference.createFromOptions(context, options) to candidate
+            } catch (error: OutOfMemoryError) {
+                lastError = error
+                Log.e(TAG, "LlmInference.createFromOptions OOM backend=$candidate", error)
+                logMemorySnapshot(context, "Post-oom backend=$candidate")
+                if (canRetry) {
+                    Log.w(TAG, "Retrying LlmInference on fallback backend=${candidates[index + 1]} after OOM.")
+                    continue
+                }
+                clearLoadedState()
+                throw IllegalStateException("端侧模型加载内存不足。请关闭其他应用后重试，或保持云端模式。", error)
+            } catch (error: UnsatisfiedLinkError) {
+                Log.e(TAG, "LlmInference native library missing or ABI mismatch backend=$candidate", error)
+                clearLoadedState()
+                throw IllegalStateException("端侧推理运行库缺失或 ABI 不匹配，请重新安装 arm64-v8a 包。", error)
+            } catch (error: IllegalArgumentException) {
+                lastError = error
+                Log.e(TAG, "LlmInference rejected model/options backend=$candidate", error)
+                if (canRetry && candidate == LlmInference.Backend.GPU) {
+                    Log.w(TAG, "Retrying LlmInference on CPU after GPU argument/runtime failure.")
+                    continue
+                }
+                clearLoadedState()
+                throw IllegalStateException("模型格式或推理参数不兼容：${error.message ?: error.javaClass.simpleName}", error)
+            } catch (error: Throwable) {
+                lastError = error
+                Log.e(TAG, "LlmInference.createFromOptions failed backend=$candidate", error)
+                logMemorySnapshot(context, "Post-failure backend=$candidate")
+                if (canRetry && candidate == LlmInference.Backend.GPU) {
+                    Log.w(TAG, "Retrying LlmInference on CPU after GPU failure.")
+                    continue
+                }
+                clearLoadedState()
+                val reason = error.message ?: error.javaClass.simpleName
+                throw IllegalStateException("端侧模型加载失败：$reason", error)
+            }
+        }
+
+        clearLoadedState()
+        val reason = lastError?.message ?: lastError?.javaClass?.simpleName ?: "unknown"
+        throw IllegalStateException("端侧模型加载失败：$reason", lastError)
+    }
+
     private fun assertCanLoadModel(context: Context, file: File) {
         if (file.length() > MAX_LOADABLE_MODEL_BYTES) {
             throw IllegalStateException(
-                "当前端侧演示默认使用 Gemma 3 1B。${file.name} 体积较大，容易导致手机内存不足或闪退，请在隐私模式里切换到 Gemma 3 1B。"
+                "当前端侧演示支持 Gemma 4 E2B。${file.name} 超出本机安全加载上限，请切换到 Gemma 4 E2B 或 Gemma 3 1B。"
             )
         }
 
@@ -184,10 +246,16 @@ object GemmaEngineHolder {
         synchronized(lock) {
             Log.i(TAG, "release() called; current path=${loadedPathRef.get()}")
             engineRef.getAndSet(null)?.close()
-            loadedPathRef.set(null)
-            loadedBackendRef.set(null)
-            loadedMaxTokensRef.set(null)
+            clearLoadedState()
         }
+    }
+
+    private fun clearLoadedState() {
+        engineRef.set(null)
+        loadedPathRef.set(null)
+        loadedBackendRef.set(null)
+        loadedRuntimeBackendRef.set(null)
+        loadedMaxTokensRef.set(null)
     }
 
     /**
@@ -206,6 +274,10 @@ object GemmaEngineHolder {
         temperature: Float,
         enableAudio: Boolean
     ): LlmInferenceSession {
+        Log.i(
+            TAG,
+            "Creating LlmInferenceSession runtimeBackend=${loadedRuntimeBackendRef.get()} topK=$topK temperature=$temperature audio=$enableAudio"
+        )
         val graphOptionsBuilder = com.google.mediapipe.tasks.genai.llminference.GraphOptions
             .builder()
         if (enableAudio) {

@@ -9,6 +9,7 @@ import {
   FileText,
   HelpCircle,
   ListChecks,
+  ShieldCheck,
   Trash2,
   UploadCloud
 } from "lucide-react-native";
@@ -28,6 +29,7 @@ import {
   parseMedicalDocument,
   uploadMedicalDocument
 } from "../../lib/care-workflow-api";
+import { usePrivacyMode } from "../../lib/inference/privacy-mode";
 import type { FollowupSummaryResponse } from "../../types/care-workflow";
 import { colors, hitSlop, typography } from "../../lib/theme";
 import { Button } from "../ui/Button";
@@ -169,22 +171,47 @@ function rangeLabel(range: Range) {
 function ReportSyncStatusCard({
   loading,
   error,
-  report
+  report,
+  localFirst,
+  cloudSummaryConsent,
+  onRequestCloudSummary
 }: {
   loading: boolean;
   error: string | null;
   report: FollowupSummaryResponse | null;
+  localFirst: boolean;
+  cloudSummaryConsent: boolean;
+  onRequestCloudSummary: () => void;
 }) {
   if (loading) {
     return (
       <Card tone="info">
         <Text style={styles.cardTitle}>正在整理复诊摘要</Text>
-        <Text style={styles.body}>我会把已保存记录和已确认资料一起发送到摘要接口。</Text>
+        <Text style={styles.body}>
+          {localFirst && !cloudSummaryConsent
+            ? "本地优先模式下，当前仅使用本机摘要，不上传原始记录或资料。"
+            : "我会把已保存记录和已确认资料一起发送到摘要接口。"}
+        </Text>
       </Card>
     );
   }
 
   if (report) {
+    if (localFirst && !cloudSummaryConsent) {
+      return (
+        <Card tone="watch">
+          <View style={styles.headerRow}>
+            <ShieldCheck color={colors.status.watch} size={21} />
+            <Text style={styles.cardTitle}>本地优先摘要</Text>
+          </View>
+          <Text style={styles.body}>当前摘要没有上传原始照护记录或资料。需要云端长上下文整理时，可单独确认本次处理。</Text>
+          <View style={styles.consentAction}>
+            <Button label="本次使用云端摘要" variant="secondary" onPress={onRequestCloudSummary} />
+          </View>
+        </Card>
+      );
+    }
+
     return (
       <Card tone="brand">
         <Text style={styles.cardTitle}>复诊摘要已同步</Text>
@@ -198,6 +225,11 @@ function ReportSyncStatusCard({
       <Card tone="watch">
         <Text style={styles.cardTitle}>当前使用本地摘要</Text>
         <Text style={styles.body}>{error}</Text>
+        {localFirst && !cloudSummaryConsent ? (
+          <View style={styles.consentAction}>
+            <Button label="本次使用云端摘要" variant="secondary" onPress={onRequestCloudSummary} />
+          </View>
+        ) : null}
       </Card>
     );
   }
@@ -207,6 +239,7 @@ function ReportSyncStatusCard({
 
 function DocumentSupplementEntryCard() {
   const { patient, followupDocuments: supplements, trackEvent, updateFollowupDocuments } = useCareMind();
+  const [privacyOn] = usePrivacyMode();
   const [selectedType, setSelectedType] = useState<FollowupDocumentType>("clinic_note");
   const [manualSummary, setManualSummary] = useState("");
 
@@ -216,6 +249,62 @@ function DocumentSupplementEntryCard() {
 
   function setSupplements(updater: (current: FollowupDocumentRecord[]) => FollowupDocumentRecord[]) {
     updateFollowupDocuments(updater);
+  }
+
+  function requestDocumentCloudConsent(asset: DocumentPicker.DocumentPickerAsset): Promise<boolean> {
+    if (!privacyOn) {
+      return Promise.resolve(true);
+    }
+
+    trackEvent("privacy_cloud_consent_prompted", {
+      intent: "followup_document",
+      local_first: true,
+      raw_file_upload: true,
+      raw_text_upload: !!manualSummary.trim(),
+      document_type: selectedType,
+      file_size: asset.size ?? null
+    });
+
+    return new Promise((resolve) => {
+      Alert.alert(
+        "确认上传资料？",
+        "本地优先模式已开启。上传后，文件和摘要会发送到云端用于资料整理；不同意时可以只保存手动摘要。",
+        [
+          {
+            text: "取消",
+            style: "cancel",
+            onPress: () => {
+              trackEvent("privacy_cloud_consent_denied", {
+                intent: "followup_document",
+                local_first: true,
+                raw_file_upload: true,
+                document_type: selectedType
+              });
+              trackEvent("privacy_local_first_blocked_network", {
+                intent: "followup_document",
+                reason: "document_cloud_consent_missing",
+                local_first: true
+              });
+              resolve(false);
+            }
+          },
+          {
+            text: "同意本次上传",
+            onPress: () => {
+              trackEvent("privacy_cloud_consent_granted", {
+                intent: "followup_document",
+                local_first: true,
+                raw_file_upload: true,
+                raw_text_upload: !!manualSummary.trim(),
+                document_type: selectedType,
+                file_size: asset.size ?? null
+              });
+              resolve(true);
+            }
+          }
+        ]
+      );
+    });
   }
 
   async function pickDocument() {
@@ -280,11 +369,18 @@ function DocumentSupplementEntryCard() {
         return;
       }
 
+      const cloudConsent = await requestDocumentCloudConsent(asset);
+      if (!cloudConsent) {
+        return;
+      }
+
       const localId = `supplement_${Date.now()}`;
       const createdAt = new Date().toISOString();
       trackEvent("document_upload_started", {
         document_type: selectedType,
-        has_summary: !!manualSummary.trim()
+        has_summary: !!manualSummary.trim(),
+        local_first: privacyOn,
+        cloud_consent: privacyOn ? "explicit" : "standard"
       });
       setSupplements((current) => [
         {
@@ -309,6 +405,7 @@ function DocumentSupplementEntryCard() {
           patientId: patient.id,
           documentType: selectedType,
           summary: manualSummary.trim(),
+          userConfirmedCloudUpload: cloudConsent,
           asset: {
             uri: asset.uri,
             name: asset.name,
@@ -343,7 +440,9 @@ function DocumentSupplementEntryCard() {
           document_id: uploaded.document_id,
           document_type: uploaded.document_type
         });
-        const parseResult = await parseMedicalDocument(uploaded.document_id);
+        const parseResult = await parseMedicalDocument(uploaded.document_id, {
+          userConfirmedCloudParse: cloudConsent
+        });
         if (parseResult.status === "parse_failed") {
           trackEvent("document_parse_failed", {
             document_id: uploaded.document_id,
@@ -557,12 +656,18 @@ function DocumentSupplementEntryCard() {
 
       <View style={styles.documentBoundaryBox}>
         <Text style={styles.documentBoundaryText}>
-          上传资料可能包含敏感健康信息。CareMind 只做资料整理和术语辅助，不判断是否需要检查，也不调整用药。
+          {privacyOn
+            ? "本地优先模式已开启。文件不会自动上传；选择文件后需确认本次云端整理，也可以只保存手动摘要。"
+            : "上传资料可能包含敏感健康信息。CareMind 只做资料整理和术语辅助，不判断是否需要检查，也不调整用药。"}
         </Text>
       </View>
 
       <View style={styles.documentActions}>
-        <Button label="选择文件" icon={<UploadCloud color="#FFFFFF" size={19} />} onPress={pickDocument} />
+        <Button
+          label={privacyOn ? "确认并选择文件" : "选择文件"}
+          icon={<UploadCloud color="#FFFFFF" size={19} />}
+          onPress={pickDocument}
+        />
         <Button label="只保存摘要" variant="secondary" onPress={addManualSummary} />
       </View>
 
@@ -780,6 +885,7 @@ function buildCopySummaryText({
 
 export function FollowupPrepScreen() {
   const { patient, recordCount, memoryItems, attentionItems, followupDocuments, trackEvent } = useCareMind();
+  const [privacyOn] = usePrivacyMode();
   const [range, setRange] = useState<Range>("7d");
   const [copying, setCopying] = useState(false);
   const [copySheetVisible, setCopySheetVisible] = useState(false);
@@ -787,6 +893,7 @@ export function FollowupPrepScreen() {
   const [report, setReport] = useState<FollowupSummaryResponse | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [cloudSummaryConsent, setCloudSummaryConsent] = useState(false);
   const reviewedFollowupDocuments = useMemo(
     () => followupDocuments.filter((item) => item.status === "reviewed"),
     [followupDocuments]
@@ -805,6 +912,12 @@ export function FollowupPrepScreen() {
     ? report.followup_patch.materials_to_bring
     : [...materials, ...confirmedSupplementItems];
   const hasReportContent = recordCount > 0 || reviewedFollowupDocuments.length > 0;
+
+  useEffect(() => {
+    if (privacyOn) {
+      setCloudSummaryConsent(false);
+    }
+  }, [privacyOn]);
 
   useEffect(() => {
     let cancelled = false;
@@ -827,7 +940,11 @@ export function FollowupPrepScreen() {
           recordCount,
           attentionItems,
           memoryItems,
-          followupDocuments: reviewedFollowupDocuments
+          followupDocuments: reviewedFollowupDocuments,
+          includeEnglishKeyPhrases: true,
+          cloudSummaryAllowed: !privacyOn || cloudSummaryConsent,
+          rawTextUploadAllowed: !privacyOn || cloudSummaryConsent,
+          fullWindowRequired: true
         });
 
         if (cancelled) return;
@@ -837,7 +954,9 @@ export function FollowupPrepScreen() {
           record_count: recordCount,
           attention_count: attentionItems.length,
           document_count: reviewedFollowupDocuments.length,
-          source: "backend"
+          source: response.model_profile,
+          local_first: privacyOn,
+          cloud_consent: privacyOn ? (cloudSummaryConsent ? "explicit" : "none") : "standard"
         });
       } catch (error) {
         if (cancelled) return;
@@ -861,7 +980,64 @@ export function FollowupPrepScreen() {
     return () => {
       cancelled = true;
     };
-  }, [attentionItems, memoryItems, patient.id, range, recordCount, reviewedFollowupDocuments, trackEvent]);
+  }, [
+    attentionItems,
+    cloudSummaryConsent,
+    memoryItems,
+    patient.id,
+    privacyOn,
+    range,
+    recordCount,
+    reviewedFollowupDocuments,
+    trackEvent
+  ]);
+
+  function requestCloudSummaryConsent() {
+    trackEvent("privacy_cloud_consent_prompted", {
+      intent: "follow_up_summary",
+      local_first: privacyOn,
+      raw_text_upload: true,
+      document_count: reviewedFollowupDocuments.length,
+      record_count: recordCount
+    });
+
+    Alert.alert(
+      "使用云端生成复诊摘要？",
+      "本次会把已保存照护记录、已确认资料和摘要输入发送到云端，用于生成长上下文复诊材料。",
+      [
+        {
+          text: "取消",
+          style: "cancel",
+          onPress: () => {
+            trackEvent("privacy_cloud_consent_denied", {
+              intent: "follow_up_summary",
+              local_first: privacyOn,
+              raw_text_upload: true,
+              document_count: reviewedFollowupDocuments.length
+            });
+            trackEvent("privacy_local_first_blocked_network", {
+              intent: "follow_up_summary",
+              reason: "cloud_summary_consent_missing",
+              local_first: privacyOn
+            });
+          }
+        },
+        {
+          text: "同意本次生成",
+          onPress: () => {
+            setCloudSummaryConsent(true);
+            trackEvent("privacy_cloud_consent_granted", {
+              intent: "follow_up_summary",
+              local_first: privacyOn,
+              raw_text_upload: true,
+              document_count: reviewedFollowupDocuments.length,
+              record_count: recordCount
+            });
+          }
+        }
+      ]
+    );
+  }
 
   function handleRangeChange(nextRange: Range) {
     setRange(nextRange);
@@ -938,7 +1114,14 @@ export function FollowupPrepScreen() {
 
       {hasReportContent ? (
         <>
-          <ReportSyncStatusCard loading={reportLoading} error={reportError} report={report} />
+          <ReportSyncStatusCard
+            loading={reportLoading}
+            error={reportError}
+            report={report}
+            localFirst={privacyOn}
+            cloudSummaryConsent={cloudSummaryConsent}
+            onRequestCloudSummary={requestCloudSummaryConsent}
+          />
           <ClinicalSummarySheet recordCount={recordCount} summaryBullets={summaryBullets} />
           <TriedStrategiesCard confirmedMemories={memoryItems.filter((item) => item.status === "confirmed")} />
           <ChecklistCard
@@ -1005,6 +1188,9 @@ const styles = StyleSheet.create({
     ...typography.helper,
     color: colors.text.secondary,
     marginTop: 8
+  },
+  consentAction: {
+    marginTop: 12
   },
   documentChipRow: {
     flexDirection: "row",

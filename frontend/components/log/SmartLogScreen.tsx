@@ -43,6 +43,7 @@ type ScriptAdvice = {
   notRecommended: string;
   recommended: string;
   principle: string;
+  recordSuggestion?: string;
 };
 
 type BrowserSpeechRecognitionResult = {
@@ -918,6 +919,9 @@ function AttentionPreviewCard() {
 }
 
 function InstantScriptCard({ advice }: { advice: ScriptAdvice }) {
+  const recordSuggestion =
+    advice.recordSuggestion ?? "记录触发场景、回应后情绪是否缓和，以及下次是否值得继续尝试。";
+
   function speak() {
     Speech.stop();
     Speech.speak(advice.recommended, { language: "zh-CN", pitch: 1.0, rate: 0.85 });
@@ -927,7 +931,7 @@ function InstantScriptCard({ advice }: { advice: ScriptAdvice }) {
     <Card>
       <View style={styles.headerRow}>
         <Volume2 color={colors.status.info} size={20} />
-        <Text style={styles.cardTitle}>现在可以这样回应</Text>
+        <Text style={styles.cardTitle}>沟通话术</Text>
       </View>
       <View style={styles.badScript}>
         <Text style={styles.badScriptLabel}>不建议说</Text>
@@ -941,6 +945,10 @@ function InstantScriptCard({ advice }: { advice: ScriptAdvice }) {
         </View>
       </View>
       <Text style={styles.body}>原则：{advice.principle}</Text>
+      <View style={styles.recordSuggestion}>
+        <ClipboardList color={colors.status.info} size={16} />
+        <Text style={styles.recordSuggestionText}>记录建议：{recordSuggestion}</Text>
+      </View>
     </Card>
   );
 }
@@ -1094,11 +1102,11 @@ export function SmartLogScreen() {
           {memoryItems.length > 0 ? <MemoryUsedPill label="已参考已记住的信息" /> : null}
           <View style={styles.spacer} />
           <StructuredSummaryCard structuredLog={parsedLog} onChange={setParsedLog} />
+          {scriptAdvice ? <InstantScriptCard advice={scriptAdvice} /> : null}
           {parseState === "saved" ? <AttentionPreviewCard /> : null}
           {similarMemory ? (
             <SimilarEventCard date="已记住的信息" title={similarMemory.title} description={similarMemory.description} />
           ) : null}
-          {scriptAdvice ? <InstantScriptCard advice={scriptAdvice} /> : null}
           {candidate ? <MemoryCandidateCard item={candidate} /> : null}
           <View style={styles.saveActions}>
             <Button label={parseState === "saved" ? "再记一条" : "写入日志"} onPress={parseState === "saved" ? resetInput : save} />
@@ -1116,7 +1124,8 @@ function buildScriptAdvice(note: string, structuredLog: StructuredLog): ScriptAd
     return {
       notRecommended: "没人偷，你别乱想。",
       recommended: "你是不是很担心？我陪你一起找找。",
-      principle: "先回应担心，再陪伴确认，避免直接否定和争辩。"
+      principle: "先回应担心，再陪伴确认，避免直接否定和争辩。",
+      recordSuggestion: "记录丢失物品、出现时间、找回位置，以及这句话是否让情绪缓和。"
     };
   }
 
@@ -1124,7 +1133,8 @@ function buildScriptAdvice(note: string, structuredLog: StructuredLog): ScriptAd
     return {
       notRecommended: "这里就是家，你别再说了。",
       recommended: "你是不是有点想家？我们先坐一下，我陪你慢慢说。",
-      principle: "先接住情绪，再用安全的陪伴动作转移注意力。"
+      principle: "先接住情绪，再用安全的陪伴动作转移注意力。",
+      recordSuggestion: "记录通常在什么时间想回家、当时环境，以及陪坐或老照片是否有效。"
     };
   }
 
@@ -1132,7 +1142,8 @@ function buildScriptAdvice(note: string, structuredLog: StructuredLog): ScriptAd
     return {
       notRecommended: "你必须现在吃，不吃不行。",
       recommended: "我知道你现在不想吃，我们先歇一下，等你舒服点再看看。",
-      principle: "降低对抗，记录拒药场景，不自行补药或调整剂量。"
+      principle: "降低对抗，记录拒药场景，不自行补药或调整剂量。",
+      recordSuggestion: "记录拒药发生时间、是否补服过、是否呛咳或不适；不要自行调整剂量。"
     };
   }
 
@@ -1140,11 +1151,17 @@ function buildScriptAdvice(note: string, structuredLog: StructuredLog): ScriptAd
     return {
       notRecommended: "你怎么又不吃饭？",
       recommended: "我们先吃两口软一点的，吃不下也没关系，我陪着你。",
-      principle: "减少压力，记录摄入量；如果持续少食或呛咳，应咨询医生或营养师。"
+      principle: "减少压力，记录摄入量；如果持续少食或呛咳，应咨询医生或营养师。",
+      recordSuggestion: "记录大概吃了多少、喝了多少、有没有呛咳，以及哪种食物更容易接受。"
     };
   }
 
-  return null;
+  return {
+    notRecommended: "别想太多，没事的。",
+    recommended: "我在这儿，我们慢慢来。你哪里不舒服，告诉我就好。",
+    principle: "用短句、慢语速和陪伴感降低压力；不急着纠正或催促。",
+    recordSuggestion: "记录今天沟通是否顺利、对方情绪有没有变化，以及下次可以继续尝试的方法。"
+  };
 }
 
 const styles = StyleSheet.create({
@@ -1422,6 +1439,20 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.text.primary,
     marginTop: 5
+  },
+  recordSuggestion: {
+    marginTop: 12,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: colors.statusSoft.info
+  },
+  recordSuggestionText: {
+    ...typography.helper,
+    color: colors.text.secondary,
+    flex: 1
   },
   speechButton: {
     marginTop: 12

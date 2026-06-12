@@ -4,14 +4,14 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from my_agent.care_workflow_schema import (
     CareWorkflowRequest,
     CareWorkflowResponse,
@@ -112,7 +112,15 @@ class DocumentParseField(BaseModel):
     label: str
     value: str
     confidence: Literal["low", "medium", "high"]
-    source: Literal["filename", "user_summary", "document_type", "system_template"]
+    source: Literal[
+        "filename",
+        "user_summary",
+        "document_type",
+        "system_template",
+        "multimodal_model",
+        "manual_fallback",
+        "file_quality",
+    ]
     requires_confirmation: bool = True
 
 
@@ -122,6 +130,14 @@ class DocumentReviewQuestion(BaseModel):
     reason: str
 
 
+class DocumentMedicalTermCandidate(BaseModel):
+    term: str
+    original_text: str
+    family_explanation: str
+    confidence: Literal["low", "medium", "high"]
+    requires_confirmation: bool = True
+
+
 class DocumentParseResult(BaseModel):
     document_id: str
     status: Literal["review_required", "parse_failed"]
@@ -129,6 +145,13 @@ class DocumentParseResult(BaseModel):
     review_questions: list[DocumentReviewQuestion]
     followup_summary_items: list[str]
     medical_boundary: str
+    parse_quality: Literal["readable", "partially_readable", "unreadable", "unsupported"]
+    doctor_review_needed: bool = False
+    medical_term_candidates: list[DocumentMedicalTermCandidate] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
+    model_profile: str = "deterministic_fallback"
+    multimodal_attempted: bool = False
+    requires_family_confirmation: bool = True
     parsed_at: str
     parse_error: str | None = None
 
@@ -231,12 +254,104 @@ def document_filename_hint(filename: str) -> str:
     return stem or filename
 
 
+def infer_document_parse_quality(record: dict) -> Literal["readable", "partially_readable", "unreadable", "unsupported"]:
+    filename = str(record.get("filename") or "").lower()
+    mime_type = str(record.get("mime_type") or "application/octet-stream").lower()
+    summary = normalize_summary(record.get("summary")).lower()
+    file_size = int(record.get("file_size") or 0)
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in SUPPORTED_EXTENSIONS and mime_type not in SUPPORTED_MIME_TYPES:
+        return "unsupported"
+    if file_size <= 0:
+        return "unreadable"
+    if any(token in f"{filename} {summary}" for token in ["blur", "blurry", "模糊", "看不清", "截断", "不完整", "缺页", "cropped", "partial"]):
+        return "unreadable"
+    if mime_type.startswith("image/") and file_size < 10 * 1024:
+        return "partially_readable"
+    if not summary:
+        return "partially_readable"
+    return "readable"
+
+
+def extract_medical_term_candidates(record: dict) -> list[dict[str, Any]]:
+    source_text = " ".join(
+        [
+            str(record.get("filename") or ""),
+            normalize_summary(record.get("summary")),
+            str(record.get("document_type") or ""),
+        ]
+    )
+    term_explanations = {
+        "MRI": "磁共振检查名称候选，请以报告原文为准。",
+        "CT": "计算机断层扫描检查名称候选，请以报告原文为准。",
+        "MMSE": "常见认知筛查量表名称候选，分数含义需由医生结合情况说明。",
+        "MoCA": "常见认知筛查量表名称候选，分数含义需由医生结合情况说明。",
+        "ADL": "日常生活能力评估量表名称候选，需按量表原文核对。",
+        "海马": "影像报告中可能出现的解剖结构术语候选。",
+        "脑萎缩": "影像报告中可能出现的描述性术语候选，不代表单份报告可得出结论。",
+        "白质": "影像报告中可能出现的脑部结构相关术语候选。",
+        "mg": "药物剂量单位候选，请按处方原文核对药名、剂量和频次。",
+    }
+    candidates: list[dict[str, Any]] = []
+    lower_source = source_text.lower()
+    for term, explanation in term_explanations.items():
+        if term.lower() in lower_source:
+            candidates.append(
+                {
+                    "term": term,
+                    "original_text": term,
+                    "family_explanation": explanation,
+                    "confidence": "medium",
+                    "requires_confirmation": True,
+                }
+            )
+    return candidates[:5]
+
+
+def document_safety_flags(
+    record: dict,
+    parse_quality: Literal["readable", "partially_readable", "unreadable", "unsupported"],
+    medical_term_candidates: list[dict[str, Any]],
+) -> list[str]:
+    document_type = record.get("document_type")
+    summary = normalize_summary(record.get("summary"))
+    flags: list[str] = ["family_confirmation_required", "single_report_no_medical_conclusion"]
+    if parse_quality in {"unreadable", "unsupported"}:
+        flags.append("unreadable_document")
+    if parse_quality == "partially_readable":
+        flags.append("partially_readable_document")
+    if document_type in {"imaging_report", "scale_result", "medication_list"}:
+        flags.append("doctor_review_needed")
+    if medical_term_candidates:
+        flags.append("medical_term_candidates")
+    if any(token in summary for token in ["诊断", "确诊", "恶化", "好转", "加重", "改善"]):
+        flags.append("diagnostic_risk")
+    return list(dict.fromkeys(flags))
+
+
+def should_require_doctor_review(
+    document_type: str,
+    parse_quality: Literal["readable", "partially_readable", "unreadable", "unsupported"],
+    safety_flags: list[str],
+) -> bool:
+    return (
+        parse_quality != "readable"
+        or document_type in {"imaging_report", "scale_result", "medication_list"}
+        or "diagnostic_risk" in safety_flags
+    )
+
+
 def build_document_parse_result(record: dict) -> dict:
     """Build a conservative review draft without interpreting medical conclusions."""
     document_id = record["document_id"]
     document_type = record["document_type"]
     filename = record["filename"]
     summary = normalize_summary(record.get("summary"))
+    parse_quality = infer_document_parse_quality(record)
+    medical_term_candidates = extract_medical_term_candidates(record)
+    safety_flags = document_safety_flags(record, parse_quality, medical_term_candidates)
+    doctor_review_needed = should_require_doctor_review(document_type, parse_quality, safety_flags)
     type_label = DOCUMENT_TYPE_LABELS.get(document_type, "复诊资料")
     fields: list[dict] = [
         {
@@ -254,6 +369,19 @@ def build_document_parse_result(record: dict) -> dict:
             "confidence": "medium",
             "source": "filename",
             "requires_confirmation": True,
+        },
+        {
+            "field": "parse_quality",
+            "label": "可读性",
+            "value": {
+                "readable": "可整理，仍需家属核对",
+                "partially_readable": "只能部分整理，建议家属补充",
+                "unreadable": "无法可靠读取，建议复诊时交给医生判断",
+                "unsupported": "文件类型暂不支持自动整理",
+            }[parse_quality],
+            "confidence": "high",
+            "source": "file_quality",
+            "requires_confirmation": False,
         },
     ]
 
@@ -354,6 +482,16 @@ def build_document_parse_result(record: dict) -> dict:
         ],
     }
     fields.extend(type_specific_fields.get(document_type, []))
+    fields.append(
+        {
+            "field": "organization_mode",
+            "label": "整理方式",
+            "value": "当前使用安全模板和家属摘要生成待确认草稿；云侧 Gemma 多模态 provider 接入后可替换为图片/PDF 直接整理。",
+            "confidence": "high",
+            "source": "manual_fallback",
+            "requires_confirmation": False,
+        }
+    )
 
     question_templates: dict[str, list[dict]] = {
         "clinic_note": [
@@ -385,8 +523,13 @@ def build_document_parse_result(record: dict) -> dict:
 
     followup_summary_items = [
         f"已补充{type_label}：{summary}" if summary else f"已上传{type_label}，建议家属核对日期、来源和关键原文。",
-        "该资料仅用于复诊沟通整理，影像、量表、诊断和用药结论仍需医生判断。",
+        "该资料仅用于复诊沟通整理，影像、量表、医疗结论和用药结论仍需医生判断。",
+        "系统只解释报告原文术语含义候选，不根据单份资料推断方向或结论。",
     ]
+    if parse_quality in {"unreadable", "unsupported"}:
+        followup_summary_items.insert(0, "无法可靠读取该资料，请复诊时交给医生判断。")
+    elif parse_quality == "partially_readable":
+        followup_summary_items.insert(0, "该资料只能部分整理，请家属补充关键原文并在复诊时携带原件。")
 
     return {
         "document_id": document_id,
@@ -394,7 +537,14 @@ def build_document_parse_result(record: dict) -> dict:
         "extracted_fields": fields,
         "review_questions": review_questions,
         "followup_summary_items": followup_summary_items,
-        "medical_boundary": "CareMind 只做资料整理和术语辅助，不判断诊断、不决定检查、不调整用药。",
+        "medical_boundary": "CareMind 只做资料整理和术语辅助，不判断医疗结论、不决定检查、不调整用药。",
+        "parse_quality": parse_quality,
+        "doctor_review_needed": doctor_review_needed,
+        "medical_term_candidates": medical_term_candidates,
+        "safety_flags": safety_flags,
+        "model_profile": "deterministic_fallback",
+        "multimodal_attempted": False,
+        "requires_family_confirmation": True,
         "parsed_at": utc_now_iso(),
         "parse_error": None,
     }
@@ -495,7 +645,14 @@ async def parse_medical_document(document_id: str) -> DocumentParseResult:
             extracted_fields=[],
             review_questions=[],
             followup_summary_items=[],
-            medical_boundary="CareMind 只做资料整理和术语辅助，不判断诊断、不决定检查、不调整用药。",
+            medical_boundary="CareMind 只做资料整理和术语辅助，不判断医疗结论、不决定检查、不调整用药。",
+            parse_quality="unreadable",
+            doctor_review_needed=True,
+            medical_term_candidates=[],
+            safety_flags=["parse_failed", "manual_fallback", "doctor_review_needed"],
+            model_profile="deterministic_fallback",
+            multimodal_attempted=False,
+            requires_family_confirmation=True,
             parsed_at=utc_now_iso(),
             parse_error="资料整理失败，请稍后重试或改为手动填写摘要。",
         )
@@ -685,10 +842,13 @@ GEMMA_GCS_MODEL_BUCKET = os.environ.get("CAREMIND_GCS_MODEL_BUCKET", "").strip()
 GEMMA_GCS_MODEL_PREFIX = os.environ.get("CAREMIND_GCS_MODEL_PREFIX", "models").strip("/")
 GEMMA_GCS_MODEL_DELIVERY = os.environ.get("CAREMIND_GCS_MODEL_DELIVERY", "redirect").lower()
 GEMMA_GCS_DYNAMIC_CATALOG = os.environ.get("CAREMIND_GCS_DYNAMIC_CATALOG", "1").lower() not in {"0", "false", "no"}
-GEMMA_RECOMMENDED_MODEL_ID = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
+GEMMA_RECOMMENDED_MODEL_ID = "gemma-4-E2B-it.litertlm"
 GEMMA_REMOTE_MODEL_IDS = {
     item.strip()
-    for item in os.environ.get("CAREMIND_REMOTE_MODEL_IDS", GEMMA_RECOMMENDED_MODEL_ID).split(",")
+    for item in os.environ.get(
+        "CAREMIND_REMOTE_MODEL_IDS",
+        "gemma-4-E2B-it.litertlm,Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
+    ).split(",")
     if item.strip()
 }
 
@@ -701,6 +861,8 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "description": "推荐端侧演示模型（~560 MB）。适合中端机，速度快；语音当前先由系统转成可编辑文本。",
         "supports_audio": False,
         "tier": "light",
+        "platforms": ["android"],
+        "runtime": "mediapipe-llm",
         "download_url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
         "size_bytes": 587_000_000,
     },
@@ -709,6 +871,11 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "description": "中等端侧文本模型（~2.5 GB）。用于本地照护理解与建议生成；语音当前先由系统转成可编辑文本。",
         "supports_audio": False,
         "tier": "medium",
+        "platforms": ["android", "ios"],
+        "runtime": "litert-lm",
+        "min_ios": "16.0",
+        "min_device_memory_gb": 6,
+        "recommended": True,
         "download_url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
         "size_bytes": 2_588_147_712,
     },
@@ -717,6 +884,10 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "description": "完整端侧模型（~3.5 GB）。质量更高但更吃内存，建议 8 GB+ 内存旗舰设备。",
         "supports_audio": False,
         "tier": "full",
+        "platforms": ["android", "ios"],
+        "runtime": "litert-lm",
+        "min_ios": "16.0",
+        "min_device_memory_gb": 8,
         "download_url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm?download=true",
         "size_bytes": 3_760_000_000,
     },
@@ -793,6 +964,12 @@ def _build_model_entry(path: Path) -> dict:
         "tier": registry.get("tier", _infer_model_tier(path.name, stat.st_size)),
         "size_bytes": stat.st_size,
         "format": path.suffix.lstrip("."),
+        "platforms": registry.get("platforms"),
+        "runtime": registry.get("runtime"),
+        "min_ios": registry.get("min_ios"),
+        "min_device_memory_gb": registry.get("min_device_memory_gb"),
+        "recommended": bool(registry.get("recommended", path.name == GEMMA_RECOMMENDED_MODEL_ID)),
+        "checksum_sha256": registry.get("checksum_sha256"),
         "download_path": f"/api/models/{path.name}",
         "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
     }
@@ -814,6 +991,12 @@ def _build_registry_model_entry(filename: str) -> dict:
         "tier": registry.get("tier", _infer_model_tier(filename, int(registry.get("size_bytes", 0)))),
         "size_bytes": int(registry.get("size_bytes", 0)),
         "format": suffix.lstrip("."),
+        "platforms": registry.get("platforms"),
+        "runtime": registry.get("runtime"),
+        "min_ios": registry.get("min_ios"),
+        "min_device_memory_gb": registry.get("min_device_memory_gb"),
+        "recommended": bool(registry.get("recommended", filename == GEMMA_RECOMMENDED_MODEL_ID)),
+        "checksum_sha256": registry.get("checksum_sha256"),
         "download_path": f"/api/models/{filename}",
         "modified_at": "gcs" if GEMMA_GCS_MODEL_BUCKET else "remote",
     }
@@ -833,6 +1016,12 @@ def _build_gcs_model_entry(filename: str, size_bytes: int, updated_at: datetime 
         "tier": registry.get("tier", _infer_model_tier(filename, size_bytes)),
         "size_bytes": size_bytes or int(registry.get("size_bytes", 0)),
         "format": suffix.lstrip("."),
+        "platforms": registry.get("platforms"),
+        "runtime": registry.get("runtime"),
+        "min_ios": registry.get("min_ios"),
+        "min_device_memory_gb": registry.get("min_device_memory_gb"),
+        "recommended": bool(registry.get("recommended", filename == GEMMA_RECOMMENDED_MODEL_ID)),
+        "checksum_sha256": registry.get("checksum_sha256"),
         "download_path": f"/api/models/{filename}",
         "modified_at": updated_at.isoformat() if updated_at else "gcs",
     }
@@ -942,14 +1131,24 @@ async def model_meta(filename: str):
         return _build_model_entry(_resolve_model_file(filename))
     except HTTPException:
         if GEMMA_GCS_MODEL_BUCKET and _has_gcs_model_config(filename):
-            return _build_gcs_model_entry_from_metadata(filename)
+            try:
+                return _build_gcs_model_entry_from_metadata(filename)
+            except HTTPException as gcs_exc:
+                registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+                if gcs_exc.status_code != 404 or not registry.get("download_url"):
+                    raise
+                return _build_registry_model_entry(filename)
         if GEMMA_MODEL_DOWNLOAD_MODE != "stream":
             return _build_registry_model_entry(filename)
         raise
 
 
 @app.get("/api/models/{filename}")
-async def model_download(filename: str):
+async def model_download(filename: str, request: Request):
+    return await _model_download_impl(filename, request)
+
+
+async def _model_download_impl(filename: str, request: Request | None = None):
     """Serve a specific on-device weight file.
 
     Local files are always preferred. This keeps the APK-compatible
@@ -962,15 +1161,14 @@ async def model_download(filename: str):
     except HTTPException as exc:
         registry = GEMMA_MODEL_REGISTRY.get(filename, {})
         if exc.status_code == 404 and _has_gcs_model_config(filename):
-            return _deliver_gcs_model(filename)
+            try:
+                return _deliver_gcs_model(filename)
+            except HTTPException as gcs_exc:
+                if gcs_exc.status_code != 404 or not registry.get("download_url"):
+                    raise
+                return await _proxy_remote_model(filename, request)
         if exc.status_code == 404 and registry.get("download_url"):
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "后端尚未托管该端侧模型文件。请把模型文件放入 "
-                    f"{GEMMA_MODEL_DIR} 后重启服务，或配置后端代理受限模型源。"
-                ),
-            ) from exc
+            return await _proxy_remote_model(filename, request)
         raise
     size_bytes = path.stat().st_size
 
@@ -994,6 +1192,72 @@ async def model_download(filename: str):
             "X-Model-Format": path.suffix.lstrip(".") or "bin",
             "Cache-Control": "public, max-age=86400",
         },
+    )
+
+
+async def _proxy_remote_model(filename: str, request: Request | None = None):
+    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+    remote_url = str(registry.get("download_url") or "").strip()
+    if not remote_url:
+        raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
+
+    request_headers = {
+        "User-Agent": "CareMind-Model-Proxy/1.0",
+        "Accept": "application/octet-stream,*/*",
+    }
+    if GEMMA_MODEL_REMOTE_TOKEN:
+        request_headers["Authorization"] = f"Bearer {GEMMA_MODEL_REMOTE_TOKEN}"
+    if request is not None:
+        range_header = request.headers.get("range")
+        if range_header:
+            request_headers["Range"] = range_header
+
+    timeout = httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0)
+    client = httpx.AsyncClient(follow_redirects=True, timeout=timeout)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", remote_url, headers=request_headers),
+            stream=True,
+        )
+        if upstream.status_code not in {200, 206}:
+            detail = f"远端模型源暂时不可用：HTTP {upstream.status_code}"
+            await upstream.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=502, detail=detail)
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"无法连接远端模型源：{exc.__class__.__name__}") from exc
+
+    async def iter_remote_file():
+        try:
+            async for chunk in upstream.aiter_bytes(1024 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    from fastapi.responses import StreamingResponse
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Model-Format": Path(filename).suffix.lstrip(".") or "bin",
+        "X-Model-Source": "remote-proxy",
+        "Cache-Control": "public, max-age=86400",
+        "Accept-Ranges": upstream.headers.get("accept-ranges", "bytes"),
+    }
+    for header_name in ("content-length", "content-range"):
+        value = upstream.headers.get(header_name)
+        if value:
+            headers["-".join(part.capitalize() for part in header_name.split("-"))] = value
+
+    return StreamingResponse(
+        iter_remote_file(),
+        media_type=upstream.headers.get("content-type", "application/octet-stream"),
+        status_code=upstream.status_code,
+        headers=headers,
     )
 
 
@@ -1064,7 +1328,7 @@ async def legacy_gemma_meta():
 
 @app.get("/api/models/gemma")
 async def legacy_gemma_download():
-    return await model_download(_LEGACY_DEFAULT_MODEL)
+    return await _model_download_impl(_LEGACY_DEFAULT_MODEL, None)
 
 
 # =========================

@@ -1,11 +1,16 @@
 package com.caremind.app.gemma
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.os.StatFs
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -22,7 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * inspects file contents, not the extension.
  */
 class GemmaModelDownloader(private val context: Context) {
+    private val tag = "CaremindGemmaModel"
     private val maxAttempts = 4
+    private val minFreeBytesAfterDownload = 512L * 1024L * 1024L
 
     /** Per-filename cancel flags so cancelling one download does not affect
      *  unrelated downloads (rare but cleaner). */
@@ -47,7 +54,14 @@ class GemmaModelDownloader(private val context: Context) {
 
     fun targetFile(filename: String): File {
         require(isSafeFilename(filename)) { "非法的模型文件名：$filename" }
-        return File(modelDir(), filename)
+        val appPrivateFile = File(modelDir(), filename)
+        val devFile = debugTmpModelFile()
+        if (shouldUseDebugTmpModel(filename, devFile)) {
+            Log.i(tag, "Using debug tmp model path=${devFile.absolutePath} for filename=$filename")
+            return devFile
+        }
+        Log.i(tag, "Using app model path=${appPrivateFile.absolutePath} for filename=$filename")
+        return appPrivateFile
     }
 
     private fun partFile(filename: String): File =
@@ -59,14 +73,35 @@ class GemmaModelDownloader(private val context: Context) {
     }
 
     fun delete(filename: String) {
-        targetFile(filename).takeIf { it.exists() }?.delete()
+        val target = targetFile(filename)
+        if (isDebugTmpModel(target)) {
+            Log.i(tag, "Skipping delete for debug tmp model path=${target.absolutePath}")
+        } else {
+            target.takeIf { it.exists() }?.delete()
+        }
         partFile(filename).takeIf { it.exists() }?.delete()
     }
+
+    private fun shouldUseDebugTmpModel(filename: String, devFile: File): Boolean {
+        if (!isDebuggable()) return false
+        if (!filename.lowercase().endsWith(".litertlm")) return false
+        return devFile.exists() && devFile.length() > 0
+    }
+
+    private fun isDebuggable(): Boolean =
+        (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    private fun debugTmpModelFile(): File =
+        File("/data/local/tmp/llm/gemma.litertlm")
+
+    private fun isDebugTmpModel(file: File): Boolean =
+        file.absolutePath == debugTmpModelFile().absolutePath
 
     @Throws(IOException::class)
     fun download(
         filename: String,
         url: String,
+        checksumSha256: String?,
         progressListener: (bytesDownloaded: Long, totalBytes: Long) -> Unit
     ): File {
         resetCancel(filename)
@@ -111,6 +146,9 @@ class GemmaModelDownloader(private val context: Context) {
             }
             expectedTotalBytes = totalBytes
             var downloaded = downloadedOffset
+            if (totalBytes > 0) {
+                assertEnoughDiskSpace(part.parentFile ?: modelDir(), totalBytes - downloadedOffset)
+            }
 
             try {
                 connection.inputStream.use { input ->
@@ -145,6 +183,7 @@ class GemmaModelDownloader(private val context: Context) {
                 }
 
                 if (target.exists()) target.delete()
+                verifyChecksumIfPresent(part, checksumSha256)
                 if (!part.renameTo(target)) {
                     throw IOException("下载完成但无法移动到最终路径。")
                 }
@@ -165,6 +204,47 @@ class GemmaModelDownloader(private val context: Context) {
 
         throw lastError ?: IOException("模型下载失败")
     }
+
+    private fun assertEnoughDiskSpace(directory: File, bytesRemaining: Long) {
+        if (!directory.exists()) directory.mkdirs()
+        val available = StatFs(directory.absolutePath).availableBytes
+        val required = bytesRemaining + minFreeBytesAfterDownload
+        if (available < required) {
+            throw IOException(
+                "手机剩余空间不足：还需要约 ${formatMb(required)}MB，可用约 ${formatMb(available)}MB。"
+            )
+        }
+    }
+
+    private fun verifyChecksumIfPresent(file: File, checksumSha256: String?) {
+        val expected = checksumSha256?.trim()?.lowercase(Locale.US).orEmpty()
+        if (expected.isBlank()) return
+        if (!expected.matches(Regex("^[0-9a-f]{64}$"))) {
+            throw IOException("模型校验值格式不正确。")
+        }
+        val actual = sha256(file)
+        if (actual != expected) {
+            file.delete()
+            throw IOException("模型文件校验失败，请重新下载。")
+        }
+        Log.i(tag, "Checksum OK sha256=$actual file=${file.name}")
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun formatMb(bytes: Long): Long =
+        bytes.coerceAtLeast(0L) / (1024L * 1024L)
 
     companion object {
         /** Reject path-traversal and absolute paths early. */

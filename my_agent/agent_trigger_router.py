@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from .model_routing import route_intent
 
 CareMindIntent = Literal[
     "daily_log",
@@ -168,6 +169,7 @@ def classify_agent_intent(text: str, source: str | None = None) -> AgentRoutePla
 def classify_caremind_intent(text: str, source: str = "manual") -> dict[str, object]:
     """ADK-safe read-only tool for root-agent intent routing."""
     route = classify_agent_intent(text, source)
+    model_routing = route_intent(route.intent, platform="backend").as_dict()
     return {
         "intent": route.intent,
         "agents": list(route.agents),
@@ -176,4 +178,5 @@ def classify_caremind_intent(text: str, source: str = "manual") -> dict[str, obj
         "blocks_ordinary_workflow": route.blocks_ordinary_workflow,
         "allows_doctor_summary": route.allows_doctor_summary,
         "reason": route.reason,
+        "model_routing": model_routing,
     }

@@ -10,6 +10,8 @@ Memory 知识体系分层：
 
 外部知识源配置在 mcp_knowledge_client.py 的 MCP_SOURCE_REGISTRY 中统一管理。
 """
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
 

@@ -2,7 +2,7 @@ Pod::Spec.new do |s|
   s.name           = 'CaremindGemma'
   s.version        = '0.1.0'
   s.summary        = 'CareMind iOS on-device inference bridge'
-  s.description    = 'Local Swift bridge for CareMind iOS privacy-mode model lifecycle and GGUF inference.'
+  s.description    = 'Local Swift bridge for CareMind iOS privacy-mode model lifecycle, LiteRT-LM Gemma 4, and GGUF fallback inference.'
   s.license        = { :type => 'MIT' }
   s.author         = { 'CareMind' => 'caremind@example.com' }
   s.homepage       = 'https://github.com/hyczy0809/CareMind'
@@ -19,5 +19,9 @@ Pod::Spec.new do |s|
     'SWIFT_COMPILATION_MODE' => 'wholemodule'
   }
 
-  s.source_files = '**/*.{h,m,swift}'
+  s.source_files = [
+    '**/*.{h,m,swift}',
+    '../../../vendor/litert-lm/swift/*.swift'
+  ]
+  s.vendored_frameworks = '../../../vendor/litert-lm/Artifacts/CLiteRTLM.xcframework'
 end

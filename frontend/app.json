@@ -9,7 +9,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.caremind.app",
-      "buildNumber": "2",
+      "buildNumber": "8",
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "CareMind 需要使用麦克风把照护者的语音记录转成可编辑文字。",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.caremind.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "RECORD_AUDIO",
         "INTERNET"

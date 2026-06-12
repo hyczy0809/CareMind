@@ -173,7 +173,8 @@ export function parseCareWorkflowXml(text: string): LocalCareWorkflowXml | null 
     communicationScript = {
       notRecommended: pickTag(scriptInner, "not_recommended") ?? undefined,
       recommended: pickTag(scriptInner, "recommended") ?? undefined,
-      principle: pickTag(scriptInner, "principle") ?? undefined
+      principle: pickTag(scriptInner, "principle") ?? undefined,
+      recordSuggestion: pickTag(scriptInner, "record_suggestion") ?? undefined
     };
     touched = true;
   }

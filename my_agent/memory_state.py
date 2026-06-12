@@ -9,6 +9,8 @@ memory_store/ 目录结构：
   episodic_events.json      — 情节事件流水
   caregiver_state.json      — 照护者状态
 """
+from __future__ import annotations
+
 import json
 import os
 import threading

@@ -8,14 +8,14 @@ typed business contract in later implementation phases.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
 
 ConfidenceLevel = Literal["low", "medium", "high"]
 CareSeverity = Literal["low", "medium", "high", "crisis"]
-UnknownBool = bool | Literal["unknown"]
+UnknownBool = Union[bool, Literal["unknown"]]
 ActionStatusV2 = Literal["pending", "done", "blocked"]
 GuardrailType = Literal["none", "diagnosis", "medication", "imaging_or_test", "crisis", "emergency"]
 CareWorkflowStatus = Literal["ok", "guardrail", "error"]
@@ -24,6 +24,17 @@ FollowupRange = Literal["7d", "30d", "custom"]
 FollowupSummaryStatus = Literal["ok", "error"]
 FollowupReadinessLevel = Literal["empty", "early", "ready"]
 ReportMetricTone = Literal["brand", "watch", "alert", "info"]
+ModelProfileV2 = Literal[
+    "on_device_e2b",
+    "on_device_e4b",
+    "cloud_26b",
+    "cloud_31b",
+    "cloud_31b_long_context",
+    "cloud_26b_multimodal",
+    "android_aicore_optional",
+    "deterministic_fallback",
+]
+DocumentParseQuality = Literal["readable", "partially_readable", "unreadable", "unsupported"]
 
 
 class CareWorkflowRequest(BaseModel):
@@ -31,32 +42,32 @@ class CareWorkflowRequest(BaseModel):
     caregiver_id: str = Field(min_length=1)
     note: str = Field(min_length=1, max_length=1000)
     source: CareLogSource = "manual"
-    client_event_id: str | None = None
-    timezone: str | None = "Asia/Shanghai"
+    client_event_id: Optional[str] = None
+    timezone: Optional[str] = "Asia/Shanghai"
 
 
 class GuardrailCheckRequest(BaseModel):
     patient_id: str = Field(default="local_patient", min_length=1)
     caregiver_id: str = Field(default="local_caregiver", min_length=1)
     note: str = Field(min_length=1, max_length=1000)
-    timezone: str | None = "Asia/Shanghai"
+    timezone: Optional[str] = "Asia/Shanghai"
 
 
 class AlternativeCtaV2(BaseModel):
     label: str
     action: Literal["create_doctor_question", "open_emergency_support", "save_observation", "open_followup_prep"]
-    payload: dict[str, Any] | None = None
+    payload: Optional[dict[str, Any]] = None
 
 
 class GuardrailResultV2(BaseModel):
     triggered: bool
     type: GuardrailType
-    message: str | None = None
-    alternative_cta: AlternativeCtaV2 | None = None
+    message: Optional[str] = None
+    alternative_cta: Optional[AlternativeCtaV2] = None
 
 
 class SleepLogV2(BaseModel):
-    night_wakings: int | None = Field(default=None, ge=0)
+    night_wakings: Optional[int] = Field(default=None, ge=0)
     note: str
     evidence: list[str] = Field(default_factory=list)
     confidence: ConfidenceLevel
@@ -84,7 +95,7 @@ class NutritionLogV2(BaseModel):
 
 class MedicationLogV2(BaseModel):
     mentioned: bool
-    refusal_count: int | None = Field(default=None, ge=0)
+    refusal_count: Optional[int] = Field(default=None, ge=0)
     missed_dose: UnknownBool
     duplicate_dose: UnknownBool
     medication_names: list[str] = Field(default_factory=list)
@@ -107,9 +118,9 @@ class SafetyLogV2(BaseModel):
 class CaregiverLogV2(BaseModel):
     quote: str
     sleep_hours_bucket: Literal["lt_4h", "4_6h", "gt_6h", "unknown"]
-    mood_score: int | None = Field(default=None, ge=1, le=5)
+    mood_score: Optional[int] = Field(default=None, ge=1, le=5)
     support_today: Literal["yes", "no", "partial", "unknown"]
-    personal_time: bool | None = None
+    personal_time: Optional[bool] = None
     stress_level: CareSeverity
     evidence: list[str] = Field(default_factory=list)
     confidence: ConfidenceLevel
@@ -124,14 +135,18 @@ class StructuredLogV2(BaseModel):
     medication: MedicationLogV2
     safety: SafetyLogV2
     caregiver: CaregiverLogV2
+    field_confidence: dict[str, float] = Field(default_factory=dict)
+    low_confidence_fields: list[str] = Field(default_factory=list)
+    notes_for_caregiver: list[str] = Field(default_factory=list)
+    diagnostic_risk: bool = False
 
 
 class AttentionActionV2(BaseModel):
     id: str
     label: str
     status: ActionStatusV2 = "pending"
-    blocked_reason: str | None = None
-    alternative_label: str | None = None
+    blocked_reason: Optional[str] = None
+    alternative_label: Optional[str] = None
 
 
 class AttentionItemV2(BaseModel):
@@ -150,6 +165,7 @@ class CommunicationScriptV2(BaseModel):
     recommended: str
     principle: str
     speech_text: str
+    record_suggestion: Optional[str] = None
 
 
 class CaregiverSupportV2(BaseModel):
@@ -195,9 +211,13 @@ class FollowupDocumentItemV2(BaseModel):
     type: str
     status: str
     title: str
-    summary: str | None = None
+    summary: Optional[str] = None
     confirmed_items: list[str] = Field(default_factory=list)
-    reviewed_at: str | None = None
+    reviewed_at: Optional[str] = None
+    parse_quality: Optional[DocumentParseQuality] = None
+    doctor_review_needed: bool = False
+    medical_term_candidates: list[str] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
 
 
 class FollowupSummaryRequest(BaseModel):
@@ -208,7 +228,15 @@ class FollowupSummaryRequest(BaseModel):
     attention_items: list[AttentionItemV2] = Field(default_factory=list)
     memory_items: list[FollowupMemoryItemV2] = Field(default_factory=list)
     followup_documents: list[FollowupDocumentItemV2] = Field(default_factory=list)
-    timezone: str | None = "Asia/Shanghai"
+    care_logs: list[StructuredLogV2] = Field(default_factory=list)
+    daily_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    caregiver_daily_metrics_trend: dict[str, Any] = Field(default_factory=dict)
+    document_images: list[dict[str, Any]] = Field(default_factory=list)
+    include_english_key_phrases: bool = False
+    cloud_summary_allowed: bool = True
+    raw_text_upload_allowed: bool = True
+    full_window_required: bool = True
+    timezone: Optional[str] = "Asia/Shanghai"
 
 
 class ReportMetricV2(BaseModel):
@@ -236,7 +264,14 @@ class FollowupSummaryResponse(BaseModel):
     followup_patch: FollowupPatchV2
     tried_strategies: list[str] = Field(default_factory=list)
     boundary_notice: str
-    error: CareWorkflowError | None = None
+    summary_zh: Optional[str] = None
+    english_key_phrases: list[str] = Field(default_factory=list)
+    source_window_days: int = Field(default=7, ge=0)
+    unreadable_documents: list[str] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
+    model_profile: ModelProfileV2 = "deterministic_fallback"
+    input_bundle_overview: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[CareWorkflowError] = None
 
 
 class CareWorkflowAnalyticsContext(BaseModel):
@@ -259,14 +294,14 @@ class CareWorkflowResponse(BaseModel):
     caregiver_id: str
     generated_at: str
     guardrail: GuardrailResultV2
-    structured_log: StructuredLogV2 | None = None
+    structured_log: Optional[StructuredLogV2] = None
     attention_items: list[AttentionItemV2] = Field(default_factory=list)
-    communication_script: CommunicationScriptV2 | None = None
-    caregiver_support: CaregiverSupportV2 | None = None
+    communication_script: Optional[CommunicationScriptV2] = None
+    caregiver_support: Optional[CaregiverSupportV2] = None
     memory_candidates: list[MemoryCandidateV2] = Field(default_factory=list)
-    followup_patch: FollowupPatchV2 | None = None
+    followup_patch: Optional[FollowupPatchV2] = None
     analytics_context: CareWorkflowAnalyticsContext
-    error: CareWorkflowError | None = None
+    error: Optional[CareWorkflowError] = None
 
 
 class GuardrailCheckResponse(BaseModel):

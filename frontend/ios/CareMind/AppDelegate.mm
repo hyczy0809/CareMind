@@ -24,7 +24,22 @@
 - (NSURL *)bundleURL
 {
 #if DEBUG
-  return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@".expo/.virtual-metro-entry"];
+  RCTBundleURLProvider *bundleProvider = [RCTBundleURLProvider sharedSettings];
+  if (![bundleProvider.jsLocation length] || [bundleProvider.jsLocation isEqualToString:@"localhost:8081"]) {
+    bundleProvider.jsLocation = @"127.0.0.1:8081";
+  }
+
+  NSURL *metroURL = [bundleProvider jsBundleURLForBundleRoot:@".expo/.virtual-metro-entry"];
+  return metroURL ?: [RCTBundleURLProvider jsBundleURLForBundleRoot:@".expo/.virtual-metro-entry"
+                                                       packagerHost:@"127.0.0.1:8081"
+                                                          enableDev:YES
+                                                 enableMinification:NO
+                                                    inlineSourceMap:NO
+                                                  additionalOptions:@{
+                                                    @"transform.routerRoot" : @"app",
+                                                    @"transform.engine" : @"hermes",
+                                                    @"unstable_transformProfile" : @"hermes-stable",
+                                                  }];
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif

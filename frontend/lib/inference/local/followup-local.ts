@@ -76,8 +76,37 @@ function buildFallback(input: FollowupSummaryInput): {
       .filter((item) => item.type === "effective_strategy" && item.status === "confirmed")
       .slice(0, 4)
       .map((item) => item.title),
-    boundary_notice: "以上仅用于复诊沟通整理，诊断与用药请以医生判断为准。"
+    boundary_notice: "以上仅用于复诊沟通整理，医疗结论与用药请以医生判断为准。"
   };
+}
+
+function sourceWindowDays(dateRange: FollowupSummaryInput["dateRange"]): number {
+  if (dateRange === "30d") return 30;
+  if (dateRange === "7d") return 7;
+  return 0;
+}
+
+function unreadableDocuments(input: FollowupSummaryInput): string[] {
+  return (input.followupDocuments ?? [])
+    .filter((doc) => {
+      const quality = doc.parseResult?.parse_quality;
+      return quality === "unreadable" || quality === "unsupported" || doc.parseResult?.safety_flags?.includes("unreadable_document");
+    })
+    .map((doc) => doc.title);
+}
+
+function localSummaryZh(
+  input: FollowupSummaryInput,
+  followupPatch: NonNullable<FollowupSummaryResponse["followup_patch"]>,
+  triedStrategies: string[],
+  unreadable: string[]
+): string {
+  const windowLabel = input.dateRange === "30d" ? "30 天" : input.dateRange === "7d" ? "7 天" : "所选时间段";
+  const focus = followupPatch.summary_bullets.slice(0, 4).join("；") || "暂无明确高关注事项";
+  const questions = followupPatch.doctor_questions.slice(0, 3).join("；") || "暂无需额外整理的问题";
+  const strategies = triedStrategies.slice(0, 3).join("；") || "暂无家属确认的有效策略";
+  const unreadableText = unreadable.length > 0 ? `有资料无法可靠读取：${unreadable.slice(0, 3).join("、")}。` : "";
+  return `家属记录覆盖${windowLabel}，共整理 ${input.recordCount} 条照护记录。观察到的重点包括：${focus}。家属描述中已确认或尝试过的方式包括：${strategies}。${unreadableText}建议复诊时优先沟通：${questions}。以上内容只整理家属记录、照护观察和已确认资料，不替代医生当面判断。`;
 }
 
 /**
@@ -198,6 +227,8 @@ export async function generateFollowupSummaryLocal(
       };
 
   const triedStrategies = coerceStringArray(parsed?.tried_strategies);
+  const finalTriedStrategies = triedStrategies.length > 0 ? triedStrategies : fallback.tried_strategies;
+  const unreadable = unreadableDocuments(input);
 
   return {
     report_id: `local_report_${Date.now()}`,
@@ -209,8 +240,25 @@ export async function generateFollowupSummaryLocal(
     readiness: computeReadiness(input.recordCount),
     metrics,
     followup_patch: followupPatch,
-    tried_strategies: triedStrategies.length > 0 ? triedStrategies : fallback.tried_strategies,
+    tried_strategies: finalTriedStrategies,
     boundary_notice: coerceString(parsed?.boundary_notice, fallback.boundary_notice),
+    summary_zh: localSummaryZh(input, followupPatch, finalTriedStrategies, unreadable),
+    english_key_phrases: [],
+    source_window_days: sourceWindowDays(input.dateRange),
+    unreadable_documents: unreadable,
+    safety_flags: [
+      "local_fallback_summary",
+      ...(input.cloudSummaryAllowed === false ? ["cloud_consent_required"] : []),
+      ...(unreadable.length > 0 ? ["unreadable_document"] : [])
+    ],
+    model_profile: "deterministic_fallback",
+    input_bundle_overview: {
+      source_window_days: sourceWindowDays(input.dateRange),
+      record_count: input.recordCount,
+      attention_item_count: input.attentionItems.length,
+      confirmed_document_count: (input.followupDocuments ?? []).filter((doc) => doc.status === "reviewed").length,
+      local_summary: true
+    },
     error: null
   };
 }

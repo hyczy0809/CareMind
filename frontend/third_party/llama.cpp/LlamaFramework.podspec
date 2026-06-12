@@ -32,6 +32,12 @@ Pod::Spec.new do |s|
   ]
   s.public_header_files = [
     'include/llama.h',
+    'include/ggml.h',
+    'include/ggml-alloc.h',
+    'include/ggml-backend.h',
+    'include/ggml-cpu.h',
+    'include/ggml-opt.h',
+    'include/gguf.h',
     'ggml/include/ggml.h',
     'ggml/include/ggml-alloc.h',
     'ggml/include/ggml-backend.h',

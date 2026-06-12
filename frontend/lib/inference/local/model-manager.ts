@@ -66,7 +66,6 @@ let state: ManagerState = {
   selectedModelId: getSelectedModelIdSync()
 };
 const subs = new Set<(s: ManagerState) => void>();
-const HIGH_RISK_MODEL_IDS = new Set(["gemma-4-E2B-it.litertlm", "gemma-4-E4B-it.litertlm"]);
 
 function preferredModelId(catalog: ModelCatalogEntry[]): string | null {
   return (
@@ -167,6 +166,9 @@ export async function downloadModel(filename: string): Promise<void> {
     patchEntry(filename, { status: "unsupported" });
     return;
   }
+  if (state.byModel[filename]?.status === "downloading") {
+    return;
+  }
   patchEntry(filename, {
     status: "downloading",
     progress: 0,
@@ -242,10 +244,6 @@ export async function resolveSelectedModelFilename(): Promise<string | null> {
   if (!selected) return preferred;
 
   const exists = catalog.models.some((entry) => entry.id === selected);
-  if (HIGH_RISK_MODEL_IDS.has(selected) && preferred && preferred !== selected) {
-    await setSelectedModelId(preferred);
-    return preferred;
-  }
   if (!exists && preferred) {
     await setSelectedModelId(preferred);
     return preferred;
@@ -347,20 +345,18 @@ export async function refreshCatalogNow(): Promise<ModelCatalogEntry[]> {
   return refreshAllFromCatalog();
 }
 
-/** Auto-select the safest recommended model if no selection has been made. */
+/** Auto-select the recommended model if no selection has been made. */
 export async function ensureSelectionFromCatalog(catalog: ModelCatalogEntry[]): Promise<void> {
   const preferred = preferredModelId(catalog);
   if (state.selectedModelId) {
     // If the persisted selection is no longer in the catalog, move to the
-    // recommended lightweight model. Older APKs could persist E2B/E4B; migrate
-    // those away as well because they are the most common source of OOM exits.
+    // current recommended model. Do not auto-downgrade Gemma 4: the competition
+    // build intentionally targets Gemma 4 E2B on both Android and iOS.
     const exists = catalog.some((m) => m.id === state.selectedModelId);
     if (!exists && preferred) {
       await setSelectedModelId(preferred);
     } else if (!exists) {
       await setSelectedModelId(null);
-    } else if (HIGH_RISK_MODEL_IDS.has(state.selectedModelId) && preferred && preferred !== state.selectedModelId) {
-      await setSelectedModelId(preferred);
     }
     return;
   }

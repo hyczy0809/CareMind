@@ -20,6 +20,18 @@ export type FollowupReadinessLevel = "empty" | "early" | "ready";
 
 export type ReportMetricTone = "brand" | "watch" | "alert" | "info";
 
+export type ModelProfileV2 =
+  | "on_device_e2b"
+  | "on_device_e4b"
+  | "cloud_26b"
+  | "cloud_31b"
+  | "cloud_31b_long_context"
+  | "cloud_26b_multimodal"
+  | "android_aicore_optional"
+  | "deterministic_fallback";
+
+export type DocumentParseQuality = "readable" | "partially_readable" | "unreadable" | "unsupported";
+
 export interface CareWorkflowRequest {
   patient_id: string;
   caregiver_id: string;
@@ -118,6 +130,10 @@ export interface StructuredLogV2 {
   medication: MedicationLogV2;
   safety: SafetyLogV2;
   caregiver: CaregiverLogV2;
+  field_confidence: Record<string, number>;
+  low_confidence_fields: string[];
+  notes_for_caregiver: string[];
+  diagnostic_risk: boolean;
 }
 
 export interface AttentionActionV2 {
@@ -144,6 +160,7 @@ export interface CommunicationScriptV2 {
   recommended: string;
   principle: string;
   speech_text: string;
+  record_suggestion?: string | null;
 }
 
 export interface CaregiverSupportV2 {
@@ -191,6 +208,10 @@ export interface FollowupDocumentItemV2 {
   summary?: string | null;
   confirmed_items: string[];
   reviewed_at?: string | null;
+  parse_quality?: DocumentParseQuality | null;
+  doctor_review_needed: boolean;
+  medical_term_candidates: string[];
+  safety_flags: string[];
 }
 
 export interface FollowupSummaryRequest {
@@ -201,6 +222,14 @@ export interface FollowupSummaryRequest {
   attention_items: AttentionItemV2[];
   memory_items: FollowupMemoryItemV2[];
   followup_documents: FollowupDocumentItemV2[];
+  care_logs: StructuredLogV2[];
+  daily_metrics: Record<string, unknown>[];
+  caregiver_daily_metrics_trend: Record<string, unknown>;
+  document_images: Record<string, unknown>[];
+  include_english_key_phrases: boolean;
+  cloud_summary_allowed: boolean;
+  raw_text_upload_allowed: boolean;
+  full_window_required: boolean;
   timezone?: string;
 }
 
@@ -266,5 +295,12 @@ export interface FollowupSummaryResponse {
   followup_patch: FollowupPatchV2;
   tried_strategies: string[];
   boundary_notice: string;
+  summary_zh?: string | null;
+  english_key_phrases: string[];
+  source_window_days: number;
+  unreadable_documents: string[];
+  safety_flags: string[];
+  model_profile: ModelProfileV2;
+  input_bundle_overview: Record<string, unknown>;
   error?: CareWorkflowError | null;
 }

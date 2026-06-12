@@ -4,6 +4,8 @@ CareMind Memory Tools
 对应 CareMind_Memory.md 第 7 节设计。
 所有函数签名与 ADK Agent tools 接口兼容。
 """
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
 

@@ -118,6 +118,7 @@ export function mapScriptAdvice(script: CommunicationScriptV2) {
   return {
     notRecommended: script.not_recommended,
     recommended: script.recommended,
-    principle: script.principle
+    principle: script.principle,
+    recordSuggestion: script.record_suggestion ?? undefined
   };
 }

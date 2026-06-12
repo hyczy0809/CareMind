@@ -19,10 +19,12 @@ export function buildModelMetaUrl(filename: string): string {
   return buildApiUrl(`/api/models/${encodeURIComponent(filename)}/meta`);
 }
 
-// Fallback model filename when the catalog has not been fetched yet — kept
-// in sync with the legacy /api/models/gemma alias on the backend so first
-// launches of older code paths still work.
-export const DEFAULT_MODEL_FILENAME = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm";
+// Fallback model filename when the catalog has not been fetched yet.
+// Android debug builds still prefer /data/local/tmp/llm/gemma.litertlm when
+// any .litertlm filename is selected, so we can validate Gemma 4 E2B without
+// bundling the model into the APK. Keep this ID aligned with the backend
+// /api/models registry so release builds never fall back to Hugging Face.
+export const DEFAULT_MODEL_FILENAME = "gemma-4-E2B-it.litertlm";
 
 // Inference knobs. Keep modest — the model can blow past the JSON schema if
 // it runs free, especially on the smaller 1B variant.

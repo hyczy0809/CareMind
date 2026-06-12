@@ -3,6 +3,9 @@ import Darwin
 import ExpoModulesCore
 import Foundation
 import llama
+#if canImport(CLiteRTLM)
+import CLiteRTLM
+#endif
 
 public class CaremindGemmaModule: Module {
   private let store = IosModelStore()
@@ -83,12 +86,12 @@ public class CaremindGemmaModule: Module {
       try self.store.deleteModel(filename)
     }
 
-    AsyncFunction("initEngine") { (filename: String, options: [String: Any]?) in
+    AsyncFunction("initEngine") { (filename: String, options: [String: Any]?) async throws in
       try self.store.validateFilename(filename)
       guard self.store.isModelReady(filename) else {
         throw CaremindGemmaError.modelNotFound
       }
-      try self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path, options: options)
+      try await self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path, options: options)
     }
 
     AsyncFunction("releaseEngine") {
@@ -110,11 +113,11 @@ public class CaremindGemmaModule: Module {
         guard self.store.isModelReady(filename) else {
           throw CaremindGemmaError.modelNotFound
         }
-        try self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path, options: options)
+        try await self.engine.load(modelId: filename, modelPath: self.store.modelURL(filename).path, options: options)
       }
 
       let started = Date()
-      let result = try self.engine.generate(prompt: prompt, options: options)
+      let result = try await self.engine.generate(prompt: prompt, options: options)
       let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
       return [
         "text": result.text,
@@ -319,21 +322,70 @@ struct IosLlamaGenerateOptions {
   }
 }
 
+struct IosLiteRTLoadOptions: Equatable {
+  let backend: String
+  let maxNumTokens: Int
+
+  init(_ options: [String: Any]?) {
+    backend = (options?["backend"] as? String ?? "AUTO").uppercased()
+    let requested = IosLiteRTLoadOptions.intValue(options?["contextTokens"])
+      ?? IosLiteRTLoadOptions.intValue(options?["maxTokens"])
+      ?? 1024
+    maxNumTokens = min(2048, max(512, requested))
+  }
+
+  var accelerator: String {
+    backend == "CPU" ? "cpu" : "metal"
+  }
+
+  private static func intValue(_ value: Any?) -> Int? {
+    if let value = value as? Int { return value }
+    if let value = value as? Double { return Int(value) }
+    if let value = value as? NSNumber { return value.intValue }
+    return nil
+  }
+}
+
+struct IosLiteRTGenerateOptions {
+  let temperature: Float
+  let topK: Int
+  let topP: Float
+
+  init(_ options: [String: Any]) {
+    temperature = Float(min(1.5, max(0.0, IosLiteRTGenerateOptions.doubleValue(options["temperature"]) ?? 0.4)))
+    topK = min(128, max(1, IosLiteRTGenerateOptions.intValue(options["topK"]) ?? 40))
+    topP = Float(min(1.0, max(0.0, IosLiteRTGenerateOptions.doubleValue(options["topP"]) ?? 0.95)))
+  }
+
+  private static func intValue(_ value: Any?) -> Int? {
+    if let value = value as? Int { return value }
+    if let value = value as? Double { return Int(value) }
+    if let value = value as? NSNumber { return value.intValue }
+    return nil
+  }
+
+  private static func doubleValue(_ value: Any?) -> Double? {
+    if let value = value as? Double { return value }
+    if let value = value as? Int { return Double(value) }
+    if let value = value as? NSNumber { return value.doubleValue }
+    return nil
+  }
+}
+
 final class IosGemmaEngine {
   private let stateLock = NSRecursiveLock()
   private let cancelLock = NSLock()
   private let stubResponder = IosGemmaStubResponder()
   private var llamaContext: IosLlamaContext?
   private var loadedOptions: IosLlamaLoadOptions?
+  private var litertContext: IosLiteRTLMContext?
+  private var loadedLiteRTOptions: IosLiteRTLoadOptions?
   private var cancelled = false
 
   var stubMode = false
   private(set) var loadedModelId: String?
 
-  func load(modelId: String, modelPath: String, options: [String: Any]?) throws {
-    stateLock.lock()
-    defer { stateLock.unlock() }
-
+  func load(modelId: String, modelPath: String, options: [String: Any]?) async throws {
     setCancelled(false)
     if stubMode {
       loadedModelId = modelId
@@ -341,15 +393,27 @@ final class IosGemmaEngine {
       return
     }
 
-    let nextOptions = IosLlamaLoadOptions(options)
-    if loadedModelId == modelId, loadedOptions == nextOptions, llamaContext != nil {
-      return
-    }
+    if IosGemmaEngine.isLiteRTModel(modelPath) {
+      let nextOptions = IosLiteRTLoadOptions(options)
+      if loadedModelId == modelId, loadedLiteRTOptions == nextOptions, litertContext != nil {
+        return
+      }
 
-    releaseLocked()
-    llamaContext = try IosLlamaContext(modelPath: modelPath, options: nextOptions)
-    loadedModelId = modelId
-    loadedOptions = nextOptions
+      releaseLocked()
+      litertContext = try await IosLiteRTLMContext(modelPath: modelPath, options: nextOptions)
+      loadedModelId = modelId
+      loadedLiteRTOptions = nextOptions
+    } else {
+      let nextOptions = IosLlamaLoadOptions(options)
+      if loadedModelId == modelId, loadedOptions == nextOptions, llamaContext != nil {
+        return
+      }
+
+      releaseLocked()
+      llamaContext = try IosLlamaContext(modelPath: modelPath, options: nextOptions)
+      loadedModelId = modelId
+      loadedOptions = nextOptions
+    }
   }
 
   func release() {
@@ -360,13 +424,11 @@ final class IosGemmaEngine {
   }
 
   func cancel() {
+    litertContext?.cancel()
     setCancelled(true)
   }
 
-  func generate(prompt: String, options: [String: Any]) throws -> IosGemmaGeneration {
-    stateLock.lock()
-    defer { stateLock.unlock() }
-
+  func generate(prompt: String, options: [String: Any]) async throws -> IosGemmaGeneration {
     if isCancelled() {
       setCancelled(false)
       return IosGemmaGeneration(text: IosGemmaEngine.cancelledXml, tokenCount: 0)
@@ -377,45 +439,77 @@ final class IosGemmaEngine {
       return IosGemmaGeneration(text: text, tokenCount: max(1, text.count / 4))
     }
 
-    guard let llamaContext else {
-      throw CaremindGemmaError.modelNotFound
+    if let litertContext {
+      let generation = try await litertContext.generate(
+        prompt: prompt,
+        options: IosLiteRTGenerateOptions(options)
+      )
+      if isCancelled() {
+        setCancelled(false)
+        return IosGemmaGeneration(text: IosGemmaEngine.cancelledXml, tokenCount: generation.tokenCount)
+      }
+      return generation
     }
 
-    let generateOptions = IosLlamaGenerateOptions(options)
-    let generation = try llamaContext.generate(
-      prompt: prompt,
-      options: generateOptions,
-      isCancelled: { [weak self] in self?.isCancelled() ?? false }
-    )
-    if isCancelled() {
-      setCancelled(false)
+    if let llamaContext {
+      let generateOptions = IosLlamaGenerateOptions(options)
+      let generation = try llamaContext.generate(
+        prompt: prompt,
+        options: generateOptions,
+        isCancelled: { [weak self] in self?.isCancelled() ?? false }
+      )
+      if isCancelled() {
+        setCancelled(false)
+      }
+      return generation
     }
-    return generation
+
+    throw CaremindGemmaError.modelNotFound
   }
 
   func runtimeInfo() -> [String: Any] {
     stateLock.lock()
     defer { stateLock.unlock() }
+    let modelDescription: Any = litertContext?.modelDescription ?? llamaContext?.modelDescription ?? NSNull()
     return [
       "platform": "ios",
-      "runtime": stubMode ? "stub" : "llama.cpp",
-      "accelerator": loadedOptions?.accelerator ?? "cpu",
+      "runtime": currentRuntimeName(),
+      "accelerator": loadedLiteRTOptions?.accelerator ?? loadedOptions?.accelerator ?? "cpu",
       "supportsAudio": false,
       "loadedModelId": loadedModelId as Any,
-      "modelDescription": llamaContext?.modelDescription as Any,
+      "modelDescription": modelDescription,
       "systemInfo": IosLlamaContext.systemInfo()
     ]
   }
 
   func logMemorySnapshot(label: String) {
     let usedMb = residentMemoryBytes() / 1024 / 1024
-    NSLog("[CaremindGemma] MEM[\(label)] resident=\(usedMb)MB loadedModel=\(loadedModelId ?? "none") runtime=\(stubMode ? "stub" : "llama.cpp")")
+    NSLog("[CaremindGemma] MEM[\(label)] resident=\(usedMb)MB loadedModel=\(loadedModelId ?? "none") runtime=\(currentRuntimeName())")
   }
 
   private func releaseLocked() {
     llamaContext = nil
+    litertContext = nil
     loadedModelId = nil
     loadedOptions = nil
+    loadedLiteRTOptions = nil
+  }
+
+  private func currentRuntimeName() -> String {
+    if stubMode {
+      return "stub"
+    }
+    if litertContext != nil {
+      return "litert-lm"
+    }
+    if llamaContext != nil {
+      return "llama.cpp"
+    }
+    return "unloaded"
+  }
+
+  private static func isLiteRTModel(_ modelPath: String) -> Bool {
+    modelPath.lowercased().hasSuffix(".litertlm")
   }
 
   private func isCancelled() -> Bool {
@@ -443,6 +537,93 @@ final class IosGemmaEngine {
 
   fileprivate static let cancelledXml = "<caremind><guardrail><triggered>false</triggered><type>none</type></guardrail><boundary>已取消本地生成。</boundary></caremind>"
 }
+
+#if canImport(CLiteRTLM)
+final class IosLiteRTLMContext {
+  private let engine: Engine
+  private let loadOptions: IosLiteRTLoadOptions
+  private let activeConversationLock = NSLock()
+  private var activeConversation: Conversation?
+  let modelDescription: String
+
+  init(modelPath: String, options: IosLiteRTLoadOptions) async throws {
+    loadOptions = options
+    let config = try EngineConfig(
+      modelPath: modelPath,
+      backend: IosLiteRTLMContext.backend(for: options.backend),
+      maxNumTokens: options.maxNumTokens,
+      cacheDir: try IosLiteRTLMContext.cacheDirectory().path
+    )
+    engine = Engine(engineConfig: config)
+    try await engine.initialize()
+    modelDescription = "LiteRT-LM \(URL(fileURLWithPath: modelPath).lastPathComponent)"
+  }
+
+  func generate(prompt: String, options: IosLiteRTGenerateOptions) async throws -> IosGemmaGeneration {
+    let sampler = try SamplerConfig(
+      topK: options.topK,
+      topP: options.topP,
+      temperature: options.temperature
+    )
+    let conversation = try await engine.createConversation(
+      with: ConversationConfig(samplerConfig: sampler)
+    )
+
+    activeConversationLock.lock()
+    activeConversation = conversation
+    activeConversationLock.unlock()
+    defer {
+      activeConversationLock.lock()
+      activeConversation = nil
+      activeConversationLock.unlock()
+    }
+
+    let response = try await conversation.sendMessage(Message(prompt))
+    let text = response.toString
+    return IosGemmaGeneration(text: text, tokenCount: max(1, text.count / 4))
+  }
+
+  func cancel() {
+    activeConversationLock.lock()
+    let conversation = activeConversation
+    activeConversationLock.unlock()
+    try? conversation?.cancel()
+  }
+
+  private static func backend(for requested: String) -> Backend {
+    if requested == "CPU" {
+      return .cpu()
+    }
+    return .gpu
+  }
+
+  private static func cacheDirectory() throws -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    let directory = base.appendingPathComponent("CareMind", isDirectory: true)
+      .appendingPathComponent("LiteRTLMCache", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    var mutableURL = directory
+    try mutableURL.setResourceValues(values)
+    return directory
+  }
+}
+#else
+final class IosLiteRTLMContext {
+  let modelDescription = "LiteRT-LM unavailable"
+
+  init(modelPath _: String, options _: IosLiteRTLoadOptions) async throws {
+    throw CaremindGemmaError.modelLoadFailed("LiteRT-LM Swift runtime 未链接，请确认 CLiteRTLM.xcframework 已被 CocoaPods 链接。")
+  }
+
+  func generate(prompt _: String, options _: IosLiteRTGenerateOptions) async throws -> IosGemmaGeneration {
+    throw CaremindGemmaError.modelLoadFailed("LiteRT-LM Swift runtime 未链接。")
+  }
+
+  func cancel() {}
+}
+#endif
 
 final class IosLlamaContext {
   private let model: OpaquePointer

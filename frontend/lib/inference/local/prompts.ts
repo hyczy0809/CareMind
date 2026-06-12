@@ -71,6 +71,7 @@ export interface LocalCareWorkflowJson {
     not_recommended?: string;
     recommended?: string;
     principle?: string;
+    record_suggestion?: string;
   } | null;
   guardrail?: {
     triggered?: boolean;
@@ -131,7 +132,7 @@ export function buildCareWorkflowPrompt(note: string): string {
     "evidence": [string],
     "requires_confirmation": true
   }],
-  "communication_script": { "not_recommended": string, "recommended": string, "principle": string } | null,
+  "communication_script": { "not_recommended": string, "recommended": string, "principle": string, "record_suggestion": string } | null,
   "guardrail": { "triggered": boolean, "type": "none"|"diagnosis"|"medication"|"imaging_or_test"|"crisis"|"emergency", "message": string|null }
 }
 

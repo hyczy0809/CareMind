@@ -19,12 +19,15 @@ import type {
   FollowupSummaryInput,
   TranscribeAudioNoteInput
 } from "./shared/types";
+import type { CareMindIntent, RoutingDecision } from "./shared/model-routing";
+import { buildPrivacyConfig, getCurrentRoutingPlatform, routeIntent } from "./shared/model-routing";
 
 import { isPrivacyMode } from "./privacy-mode";
 import {
   getModelEntry,
   resolveSelectedModelFilename
 } from "./local/model-manager";
+import { getMobileModelAvailability } from "./local/mobile-runtime";
 
 import { runCareWorkflowCloud } from "./cloud/care-workflow-cloud";
 import { checkGuardrailCloud } from "./cloud/guardrail-cloud";
@@ -47,11 +50,35 @@ function localUnavailableError(): Error {
   return new Error("隐私模式已开启，但本机模型尚未就绪。请先在设置里下载本地模型，或明确关闭隐私模式后使用云端整理。");
 }
 
+function hasExplicitCloudSummaryConsent(input: FollowupSummaryInput): boolean {
+  return input.cloudSummaryAllowed === true && input.rawTextUploadAllowed === true;
+}
+
+export async function getInferenceRoutingDecision(
+  intent: CareMindIntent,
+  options: {
+    userConfirmedCloud?: boolean;
+    networkAvailable?: boolean;
+    complexity?: "simple" | "complex";
+  } = {}
+): Promise<RoutingDecision> {
+  const localFirst = await isPrivacyMode();
+  const availability = await getMobileModelAvailability().catch(() => null);
+  return routeIntent({
+    intent,
+    platform: getCurrentRoutingPlatform(),
+    privacy: buildPrivacyConfig(localFirst),
+    model_availability: availability,
+    network_available: options.networkAvailable,
+    user_confirmed_cloud: options.userConfirmedCloud,
+    complexity: options.complexity
+  });
+}
+
 export async function runCareWorkflow(
   request: CareWorkflowRequest
 ): Promise<CareWorkflowAppResult> {
   if (await isPrivacyMode()) {
-    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
     return runCareWorkflowLocal(request);
   }
   return runCareWorkflowCloud(request);
@@ -61,7 +88,6 @@ export async function checkGuardrail(
   request: GuardrailCheckRequest
 ): Promise<GuardrailCheckResponse> {
   if (await isPrivacyMode()) {
-    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
     return checkGuardrailLocal(request);
   }
   return checkGuardrailCloud(request);
@@ -71,7 +97,9 @@ export async function generateFollowupSummary(
   input: FollowupSummaryInput
 ): Promise<FollowupSummaryResponse> {
   if (await isPrivacyMode()) {
-    if (!(await isSelectedLocalModelReady())) throw localUnavailableError();
+    if (hasExplicitCloudSummaryConsent(input)) {
+      return generateFollowupSummaryCloud(input);
+    }
     return generateFollowupSummaryLocal(input);
   }
   return generateFollowupSummaryCloud(input);

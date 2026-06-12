@@ -47,18 +47,18 @@ const ANDROID_FALLBACK_CATALOG: ModelCatalog = {
   model_dir: "builtin",
   models: [
     {
-      id: "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
-      filename: "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
-      display_name: "Gemma 3 1B",
-      description: "推荐端侧演示模型（~560 MB）。适合中端机，速度快；语音当前先由系统转成可编辑文本。",
+      id: "gemma-4-E2B-it.litertlm",
+      filename: "gemma-4-E2B-it.litertlm",
+      display_name: "Gemma 4 E2B",
+      description: "比赛推荐的 Android 端侧模型。通过 CareMind 后端下载，避免手机直连 Hugging Face；Debug 构建会优先读取 /data/local/tmp/llm/gemma.litertlm。",
       supports_audio: false,
-      tier: "light",
-      size_bytes: 584417280,
+      tier: "medium",
+      size_bytes: 2_588_147_712,
       format: "litertlm",
       platforms: ["android"],
       runtime: "mediapipe-llm",
       recommended: true,
-      download_path: "/api/models/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm",
+      download_path: "/api/models/gemma-4-E2B-it.litertlm",
       modified_at: "fallback"
     }
   ]
@@ -68,20 +68,20 @@ const IOS_FALLBACK_CATALOG: ModelCatalog = {
   model_dir: "builtin-ios",
   models: [
     {
-      id: "gemma-3-1b-it-Q4_K_M.gguf",
-      filename: "gemma-3-1b-it-Q4_K_M.gguf",
-      display_name: "Gemma 3 1B GGUF",
-      description: "iPhone 端侧文字整理模型（约 769 MB）。使用 llama.cpp 本地处理照护记录；语音暂不走本地模型。",
+      id: "gemma-4-E2B-it.litertlm",
+      filename: "gemma-4-E2B-it.litertlm",
+      display_name: "Gemma 4 E2B",
+      description: "比赛推荐的 iPhone 端侧模型（约 2.58 GB）。使用 LiteRT-LM Swift runtime 本地处理照护记录；语音暂不走本地模型。",
       supports_audio: false,
-      tier: "light",
-      size_bytes: 806_060_000,
-      format: "gguf",
+      tier: "medium",
+      size_bytes: 2_588_147_712,
+      format: "litertlm",
       platforms: ["ios"],
-      runtime: "llama.cpp",
+      runtime: "litert-lm",
       min_ios: "16.0",
-      min_device_memory_gb: 4,
+      min_device_memory_gb: 6,
       recommended: true,
-      download_path: "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf",
+      download_path: "/api/models/gemma-4-E2B-it.litertlm",
       modified_at: "fallback"
     }
   ]
@@ -103,8 +103,12 @@ function supportsCurrentPlatform(entry: ModelCatalogEntry): boolean {
 
 function withPlatformFallback(models: ModelCatalogEntry[]): ModelCatalogEntry[] {
   const supported = models.filter(supportsCurrentPlatform);
-  if (supported.length > 0) return supported;
-  return fallbackCatalogForCurrentPlatform().models;
+  const fallback = fallbackCatalogForCurrentPlatform().models;
+  if (supported.length === 0) return fallback;
+
+  const existing = new Set(supported.map((entry) => entry.id));
+  const missingRecommended = fallback.filter((entry) => entry.recommended && !existing.has(entry.id));
+  return [...supported, ...missingRecommended];
 }
 
 /** Fetch the model catalog from the backend. Cached for ~60 s. */
@@ -158,6 +162,10 @@ export function clearCatalogCache(): void {
 
 export function resolveModelDownloadUrl(entry: ModelCatalogEntry): string {
   if (/^https?:\/\//i.test(entry.download_path)) {
+    const filename = entry.filename || entry.id;
+    if (/^https?:\/\/([^/]+\.)?huggingface\.co\//i.test(entry.download_path) && filename) {
+      return buildApiUrl(`/api/models/${encodeURIComponent(filename)}`);
+    }
     return entry.download_path;
   }
   const path = entry.download_path.startsWith("/") ? entry.download_path : `/${entry.download_path}`;

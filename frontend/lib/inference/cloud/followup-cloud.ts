@@ -30,8 +30,20 @@ export async function generateFollowupSummaryCloud(
       title: item.title,
       summary: item.summary || null,
       confirmed_items: item.confirmedItems ?? [],
-      reviewed_at: item.reviewedAt ?? null
+      reviewed_at: item.reviewedAt ?? null,
+      parse_quality: item.parseResult?.parse_quality ?? null,
+      doctor_review_needed: item.parseResult?.doctor_review_needed ?? false,
+      medical_term_candidates: item.parseResult?.medical_term_candidates?.map((candidate) => candidate.term) ?? [],
+      safety_flags: item.parseResult?.safety_flags ?? []
     })),
+    care_logs: input.careLogs ?? [],
+    daily_metrics: input.dailyMetrics ?? [],
+    caregiver_daily_metrics_trend: input.caregiverDailyMetricsTrend ?? {},
+    document_images: input.documentImages ?? [],
+    include_english_key_phrases: input.includeEnglishKeyPhrases ?? false,
+    cloud_summary_allowed: input.cloudSummaryAllowed ?? true,
+    raw_text_upload_allowed: input.rawTextUploadAllowed ?? true,
+    full_window_required: input.fullWindowRequired ?? true,
     timezone: input.timezone ?? "Asia/Shanghai"
   };
 

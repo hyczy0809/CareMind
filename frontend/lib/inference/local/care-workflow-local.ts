@@ -74,6 +74,7 @@ const VALID_GUARDRAIL_TYPES: GuardrailType[] = [
   "crisis",
   "emergency"
 ];
+const DIAGNOSTIC_RISK_PATTERN = /诊断|确诊|病情|恶化|好转|加重|改善|阿尔茨海默|失智/;
 
 function ensureSeverity(value: unknown): CareSeverity {
   return VALID_SEVERITIES.includes(value as CareSeverity) ? (value as CareSeverity) : "low";
@@ -91,6 +92,26 @@ function timestamp(): string {
   return new Date().toISOString();
 }
 
+function confidenceScore(level: "low" | "medium" | "high"): number {
+  if (level === "high") return 0.9;
+  if (level === "medium") return 0.75;
+  return 0.5;
+}
+
+function structuredLogNotes(note: string, diagnosticRisk: boolean): string[] {
+  const notes: string[] = [];
+  if (diagnosticRisk) {
+    notes.push("记录中包含可能越过医疗判断边界的表达，已作为家属观察保存，不生成医疗结论。");
+  }
+  if (/停药|换药|加药|减药|补药|药量|剂量|处方/.test(note)) {
+    notes.push("记录中包含用药决策相关表达，请在复诊时交给医生判断。");
+  }
+  if (/MRI|CT|核磁|检查|量表/.test(note) && /要不要|该不该|需不需要/.test(note)) {
+    notes.push("记录中包含检查/量表决策相关表达，请整理成复诊问题。");
+  }
+  return notes;
+}
+
 function normaliseStructuredLog(
   raw: LocalCareWorkflowJson["structured_log"] | undefined,
   note: string
@@ -101,6 +122,34 @@ function normaliseStructuredLog(
   const medication = raw?.medication ?? {};
   const safety = raw?.safety ?? {};
   const caregiver = raw?.caregiver ?? {};
+  const behaviorItems = Array.isArray(raw?.behavior)
+    ? raw!.behavior!.slice(0, 4).map((item) => ({
+        event_type: "general",
+        label: coerceString(item.label, "未分类行为"),
+        frequency: coerceString(item.frequency, "待确认"),
+        severity: "low" as const,
+        evidence: coerceString(item.evidence, ""),
+        needs_communication_script: false,
+        confidence: "low" as const
+      }))
+    : fallback.behavior.map((item) => ({
+        event_type: "general",
+        label: item.label,
+        frequency: item.frequency,
+        severity: "low" as const,
+        evidence: item.evidence,
+        needs_communication_script: false,
+        confidence: "low" as const
+      }));
+  const fieldConfidence = {
+    sleep: confidenceScore(coerceNumberOrNull(sleep.night_wakings) !== null || fallback.sleep.nightWakings !== null ? "medium" : "low"),
+    behavior: confidenceScore(behaviorItems.length > 0 ? "medium" : "low"),
+    nutrition: confidenceScore(/[饭吃食欲饮水呛咳体重瘦]/.test(note) ? "medium" : "low"),
+    medication: confidenceScore(/[药服药拒药漏药]/.test(note) ? "medium" : "low"),
+    safety: confidenceScore(/[夜半夜起床开门出去外出走失跌倒摔]/.test(note) ? "medium" : "low"),
+    caregiver: confidenceScore(/[撑不住很累崩溃没睡烦躁压力焦虑]/.test(note) ? "medium" : "low")
+  };
+  const diagnosticRisk = DIAGNOSTIC_RISK_PATTERN.test(note);
 
   return {
     source_text: note,
@@ -111,25 +160,7 @@ function normaliseStructuredLog(
       evidence: [],
       confidence: "low"
     },
-    behavior: Array.isArray(raw?.behavior)
-      ? raw!.behavior!.slice(0, 4).map((item) => ({
-          event_type: "general",
-          label: coerceString(item.label, "未分类行为"),
-          frequency: coerceString(item.frequency, "待确认"),
-          severity: "low",
-          evidence: coerceString(item.evidence, ""),
-          needs_communication_script: false,
-          confidence: "low"
-        }))
-      : fallback.behavior.map((item) => ({
-          event_type: "general",
-          label: item.label,
-          frequency: item.frequency,
-          severity: "low" as const,
-          evidence: item.evidence,
-          needs_communication_script: false,
-          confidence: "low" as const
-        })),
+    behavior: behaviorItems,
     nutrition: {
       meal_intake: pickEnum(
         nutrition.meal_intake,
@@ -183,7 +214,13 @@ function normaliseStructuredLog(
         : ensureSeverity(caregiver.stress_level ?? "low"),
       evidence: [],
       confidence: "low"
-    }
+    },
+    field_confidence: fieldConfidence,
+    low_confidence_fields: Object.entries(fieldConfidence)
+      .filter(([, score]) => score <= 0.6)
+      .map(([field]) => field),
+    notes_for_caregiver: structuredLogNotes(note, diagnosticRisk),
+    diagnostic_risk: diagnosticRisk
   };
 }
 
@@ -260,7 +297,11 @@ function normaliseCommunicationScript(
     not_recommended: not,
     recommended,
     principle: coerceString(raw.principle, "保持温和、提供选择、避免对抗。"),
-    speech_text: recommended || not
+    speech_text: recommended || not,
+    record_suggestion: coerceString(
+      raw.record_suggestion,
+      "记录触发场景、回应后情绪是否缓和，以及下次是否值得继续尝试。"
+    )
   };
 }
 
@@ -393,7 +434,8 @@ function xmlToJsonShape(xml: LocalCareWorkflowXml): LocalCareWorkflowJson {
       ? {
           not_recommended: xml.communicationScript.notRecommended,
           recommended: xml.communicationScript.recommended,
-          principle: xml.communicationScript.principle
+          principle: xml.communicationScript.principle,
+          record_suggestion: xml.communicationScript.recordSuggestion
         }
       : null,
     guardrail: xml.guardrail

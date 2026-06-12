@@ -71,7 +71,7 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun downloadModel(filename: String?, url: String, promise: Promise) {
+    fun downloadModel(filename: String?, url: String, checksumSha256: String?, promise: Promise) {
         val safeName = try {
             requireFilename(filename)
         } catch (t: Throwable) {
@@ -99,7 +99,8 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
 
         scope.launch {
             try {
-                val file = downloader.download(safeName, url) { bytes, total ->
+                Log.i(tag, "downloadModel name=$safeName checksum=${!checksumSha256.isNullOrBlank()} url=${redactUrl(url)}")
+                val file = downloader.download(safeName, url, checksumSha256) { bytes, total ->
                     emitProgress(safeName, bytes, total)
                 }
                 val result = Arguments.createMap().apply {
@@ -152,10 +153,11 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
                 val safeName = requireFilename(filename)
                 val backend = parseBackend(options?.getStringOrNull("backend"))
                 val maxTokens = options?.getIntOrDefault("maxTokens", 2048) ?: 2048
-                Log.i(tag, "initEngine name=$safeName backend=$backend maxTokens=$maxTokens")
+                val modelPath = downloader.targetFile(safeName).absolutePath
+                Log.i(tag, "initEngine name=$safeName path=$modelPath backend=$backend maxTokens=$maxTokens")
                 GemmaEngineHolder.ensureEngine(
                     reactApplicationContext,
-                    downloader.targetFile(safeName).absolutePath,
+                    modelPath,
                     backend,
                     maxTokens
                 )
@@ -208,12 +210,13 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
                 }
 
                 val safeName = requireFilename(filename)
-                Log.i(tag, "generate requestId=$requestId promptLen=${prompt.length} backend=$backend maxTokens=$maxTokens")
+                val modelPath = downloader.targetFile(safeName).absolutePath
+                Log.i(tag, "generate requestId=$requestId name=$safeName path=$modelPath promptLen=${prompt.length} backend=$backend maxTokens=$maxTokens")
                 val text = withContext(Dispatchers.IO) {
                     GemmaEngineHolder.runExclusive {
                         val engine = GemmaEngineHolder.ensureEngine(
                             reactApplicationContext,
-                            downloader.targetFile(safeName).absolutePath,
+                            modelPath,
                             backend,
                             maxTokens
                         )
@@ -262,12 +265,13 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
 
                 val safeName = requireFilename(filename)
                 val audioBytes = readAudioFile(audioFilePath)
-                Log.i(tag, "generateWithAudio requestId=$requestId audioBytes=${audioBytes.size} backend=$backend maxTokens=$maxTokens")
+                val modelPath = downloader.targetFile(safeName).absolutePath
+                Log.i(tag, "generateWithAudio requestId=$requestId name=$safeName path=$modelPath audioBytes=${audioBytes.size} backend=$backend maxTokens=$maxTokens")
                 val text = withContext(Dispatchers.IO) {
                     GemmaEngineHolder.runExclusive {
                         val engine = GemmaEngineHolder.ensureEngine(
                             reactApplicationContext,
-                            downloader.targetFile(safeName).absolutePath,
+                            modelPath,
                             backend,
                             maxTokens
                         )
@@ -388,4 +392,7 @@ class CaremindGemmaModule(reactContext: ReactApplicationContext) :
         }
         return sb.toString()
     }
+
+    private fun redactUrl(url: String): String =
+        url.substringBefore('?')
 }

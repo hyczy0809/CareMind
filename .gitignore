@@ -44,6 +44,7 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 !frontend/.env.production.example
+frontend/artifacts/
 
 # Generated demo video artifacts
 docs/demo-video/generated/*.webm

@@ -69,7 +69,12 @@ export interface LocalCareWorkflowXml {
     evidence?: string[];
     requiresConfirmation?: boolean;
   }>;
-  communicationScript?: { notRecommended?: string; recommended?: string; principle?: string } | null;
+  communicationScript?: {
+    notRecommended?: string;
+    recommended?: string;
+    principle?: string;
+    recordSuggestion?: string;
+  } | null;
   guardrail?: { triggered?: boolean; type?: string; message?: string | null };
 }
 
@@ -110,6 +115,7 @@ export function buildCareWorkflowXmlPrompt(note: string): string {
   <not_recommended>不要说"你记错了"</not_recommended>
   <recommended>说"我知道你想家"</recommended>
   <principle>先共情再转移注意力</principle>
+  <record_suggestion>记录触发场景和回应后情绪是否缓和</record_suggestion>
 </communication_script>
 
 <guardrail triggered="false" type="none"><message/></guardrail>

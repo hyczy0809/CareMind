@@ -10,8 +10,24 @@ import type {
 } from "../../../types/caremind";
 import type {
   CareWorkflowResponse,
-  FollowupRange
+  FollowupRange,
+  StructuredLogV2
 } from "../../../types/care-workflow";
+
+export type {
+  CareMindIntent,
+  CareMindPlatform,
+  LocalFirstPrivacyConfig,
+  MobileModelAvailability,
+  ModelProfile,
+  ModelRoutingPolicy,
+  RouteIntentInput,
+  RoutingDecision,
+  RoutingPrivacyMode,
+  RoutingRuntimePlatform,
+  RuntimeInitializationState,
+  RuntimeInitializationStatus
+} from "./model-routing";
 
 export interface CareWorkflowAppResult {
   response: CareWorkflowResponse;
@@ -22,6 +38,7 @@ export interface CareWorkflowAppResult {
     notRecommended: string;
     recommended: string;
     principle: string;
+    recordSuggestion?: string;
   } | null;
 }
 
@@ -33,6 +50,14 @@ export interface FollowupSummaryInput {
   attentionItems: AttentionItem[];
   memoryItems: MemoryItem[];
   followupDocuments?: FollowupDocumentRecord[];
+  careLogs?: StructuredLogV2[];
+  dailyMetrics?: Record<string, unknown>[];
+  caregiverDailyMetricsTrend?: Record<string, unknown>;
+  documentImages?: Record<string, unknown>[];
+  includeEnglishKeyPhrases?: boolean;
+  cloudSummaryAllowed?: boolean;
+  rawTextUploadAllowed?: boolean;
+  fullWindowRequired?: boolean;
   timezone?: string;
 }
 
