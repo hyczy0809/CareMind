@@ -1,0 +1,46 @@
+# CareMind backend — single-service compose.
+#
+# Quick start (local development with on-device model streaming):
+#   1.  cp .env.example .env          # then fill in real values
+#   2.  mkdir -p models && cp ../*.litertlm models/
+#   3.  docker compose up -d
+#
+# Production (model CDN, no local files):
+#   1.  Set CAREMIND_MODEL_CDN_BASE_URL in .env
+#   2.  Set CAREMIND_MODEL_DOWNLOAD_MODE=redirect
+#   3.  docker compose up -d
+#
+# The .env file is automatically loaded by Docker Compose.
+# Sensitive values (tokens, keys) must NOT be committed to git.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-8090}:8090"
+    env_file: .env
+    environment:
+      # Override PORT inside the container (Compose maps it above).
+      - PORT=8090
+      # Writable directory for uploads and runtime state.
+      - CAREMIND_RUNTIME_DIR=/tmp/caremind
+      - CAREMIND_UPLOAD_DIR=/tmp/caremind/uploads/medical_documents
+    volumes:
+      # Mount model files read-only for stream mode.
+      # Ignored when CAREMIND_MODEL_DOWNLOAD_MODE=redirect.
+      - ./models:/models:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8090/api/models')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

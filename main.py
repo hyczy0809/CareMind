@@ -682,24 +682,40 @@ GEMMA_REMOTE_MODEL_IDS = {
     if item.strip()
 }
 
+# Base URL prefix for model weight downloads. When set, download URLs are
+# constructed as  {CAREMIND_MODEL_CDN_BASE_URL}/{filename}  instead of using
+# the hardcoded hf-mirror URLs below. This lets you switch to Cloudflare R2,
+# S3, or any other object-storage CDN without editing source code.
+# When unset (default), the per-model download_url in GEMMA_MODEL_REGISTRY
+# is used as-is.
+_CDN_BASE = os.environ.get("CAREMIND_MODEL_CDN_BASE_URL", "").rstrip("/")
+
 # A small static lookup keyed by exact filename. Drives the human-readable
 # display name and capability flags shown to the user in the picker.
 # Files not in this table still appear in the catalog with a fallback label.
+#
+# If CAREMIND_MODEL_CDN_BASE_URL is set, download_url is overridden to
+#   {CAREMIND_MODEL_CDN_BASE_URL}/{filename}
+# so you never need to touch this dict just to change the CDN host.
 GEMMA_MODEL_REGISTRY: dict[str, dict] = {
     "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm": {
         "display_name": "Gemma 3 1B",
         "description": "轻量文本模型（~560 MB）。适合中端机，速度快，不支持语音转写。",
         "supports_audio": False,
         "tier": "light",
-        "download_url": "https://hf-mirror.com/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
+        "download_url": f"{_CDN_BASE}/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
+        if _CDN_BASE
+        else "https://hf-mirror.com/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
         "size_bytes": 587_000_000,
     },
     "gemma-4-E2B-it.litertlm": {
         "display_name": "Gemma 4 E2B",
-        "description": "中等多模态模型（~2.5 GB）。支持语音转写，建议 6 GB+ 内存设备。",
+        "description": "中等多模态模型（~2.5 GB）。支持语音转写，建议 8 GB+ 内存设备，CPU 后端。",
         "supports_audio": True,
         "tier": "medium",
-        "download_url": "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
+        "download_url": f"{_CDN_BASE}/gemma-4-E2B-it.litertlm"
+        if _CDN_BASE
+        else "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
         "size_bytes": 2_588_147_712,
     },
     "gemma-4-E4B-it.litertlm": {
@@ -707,7 +723,9 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "description": "完整多模态模型（~3.5 GB）。质量最高，建议 8 GB+ 内存旗舰设备。",
         "supports_audio": True,
         "tier": "full",
-        "download_url": "https://hf-mirror.com/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm?download=true",
+        "download_url": f"{_CDN_BASE}/gemma-4-E4B-it.litertlm"
+        if _CDN_BASE
+        else "https://hf-mirror.com/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm?download=true",
         "size_bytes": 3_760_000_000,
     },
 }

@@ -191,8 +191,10 @@ Create `.env` from [.env.example](.env.example).
 | `TRANSCRIPTION_API_KEY` | optional for cloud STT | Speech transcription provider key; falls back to `OPENAI_API_KEY`, `MODEL_API_KEY`, or `CF_AIG_TOKEN` |
 | `TRANSCRIPTION_MODEL` | optional | Speech transcription model, default `gpt-4o-mini-transcribe` |
 | `TRANSCRIPTION_BASE_URL` | optional | OpenAI-compatible transcription endpoint, default `https://api.openai.com/v1` |
-| `CAREMIND_MODEL_DOWNLOAD_MODE` | optional | `redirect` or `stream` for model downloads |
-| `CAREMIND_REMOTE_MODEL_IDS` | optional | Comma-separated remote `.litertlm` model ids |
+| `CAREMIND_MODEL_CDN_BASE_URL` | optional | CDN base URL for on-device model weights (e.g. R2 / S3). When set, `/api/models/{file}` redirects to `{base}/{file}` |
+| `CAREMIND_MODEL_DOWNLOAD_MODE` | optional | `redirect` (default) or `stream` for model downloads |
+| `CAREMIND_REMOTE_MODEL_IDS` | optional | Comma-separated `.litertlm` model filenames to advertise when not on disk |
+| `CAREMIND_GEMMA_MODEL_DIR` | optional | Directory containing model files for stream mode; defaults to repo root |
 | `PROMPT_MODE` | optional | `WEAK` or `STRONG` prompt mode |
 | `PORT` | optional | Default `python main.py` port |
 | `DRUGBANK_API_KEY` | optional | External MCP drug knowledge source |
