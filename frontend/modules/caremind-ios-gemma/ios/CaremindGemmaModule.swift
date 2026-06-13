@@ -11,6 +11,7 @@ public class CaremindGemmaModule: Module {
   private let store = IosModelStore()
   private let engine = IosGemmaEngine()
   private var downloadTasks: [String: URLSessionDownloadTask] = [:]
+  private var cancelledDownloads: Set<String> = []
 
   public func definition() -> ModuleDefinition {
     Name("CaremindGemma")
@@ -27,10 +28,10 @@ public class CaremindGemmaModule: Module {
       return self.store.modelURL(filename).path
     }
 
-    AsyncFunction("downloadModel") { (filename: String, urlString: String, checksum: String?) async throws -> [String: Any] in
+    AsyncFunction("downloadModel") { (filename: String, urlString: String, checksum: String?, expectedBytesNumber: Double?) async throws -> [String: Any] in
       try self.store.validateFilename(filename)
 
-      if self.engine.stubMode {
+      if self.engine.isStubModeEnabled {
         let fileURL = try self.store.writeStubModel(filename)
         self.sendProgress(filename: filename, bytesDownloaded: 1, totalBytes: 1)
         return ["path": fileURL.path, "filename": filename, "bytes": 1]
@@ -40,42 +41,25 @@ public class CaremindGemmaModule: Module {
         throw CaremindGemmaError.badUrl
       }
 
-      let targetURL = self.store.modelURL(filename)
-      let partialURL = self.store.partialModelURL(filename)
-      try self.store.prepareModelsDirectory()
-      try? FileManager.default.removeItem(at: partialURL)
-
-      let (tempURL, response) = try await URLSession.shared.download(from: sourceURL)
-      let expectedBytes = max(response.expectedContentLength, 0)
-      try FileManager.default.moveItem(at: tempURL, to: partialURL)
-
-      let actualBytes = try self.store.fileSize(partialURL)
-      self.sendProgress(
-        filename: filename,
-        bytesDownloaded: actualBytes,
-        totalBytes: expectedBytes > 0 ? expectedBytes : actualBytes
-      )
-
-      if let checksum = checksum, !checksum.isEmpty {
-        let actualChecksum = try self.store.sha256(partialURL)
-        guard actualChecksum.lowercased() == checksum.lowercased() else {
-          try? FileManager.default.removeItem(at: partialURL)
-          throw CaremindGemmaError.checksumFailed
-        }
+      let expectedBytes = expectedBytesNumber.flatMap { value -> Int64? in
+        let rounded = Int64(value)
+        return rounded > 0 ? rounded : nil
       }
-
-      try? FileManager.default.removeItem(at: targetURL)
-      try FileManager.default.moveItem(at: partialURL, to: targetURL)
-      try self.store.excludeFromBackup(targetURL)
-
-      return ["path": targetURL.path, "filename": filename, "bytes": actualBytes]
+      self.cancelledDownloads.remove(filename)
+      let targetURL = try await self.downloadModelFile(
+        filename: filename,
+        sourceURL: sourceURL,
+        checksum: checksum,
+        expectedBytes: expectedBytes
+      )
+      return ["path": targetURL.path, "filename": filename, "bytes": try self.store.fileSize(targetURL)]
     }
 
     AsyncFunction("cancelDownload") { (filename: String) in
       try self.store.validateFilename(filename)
+      self.cancelledDownloads.insert(filename)
       self.downloadTasks[filename]?.cancel()
       self.downloadTasks[filename] = nil
-      try? FileManager.default.removeItem(at: self.store.partialModelURL(filename))
     }
 
     AsyncFunction("deleteModel") { (filename: String) in
@@ -119,10 +103,16 @@ public class CaremindGemmaModule: Module {
       let started = Date()
       let result = try await self.engine.generate(prompt: prompt, options: options)
       let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+      let runtime = self.engine.runtimeInfo()
+      let isStub = self.engine.isStubModeEnabled
       return [
         "text": result.text,
         "tokenCount": result.tokenCount,
-        "elapsedMs": elapsedMs
+        "elapsedMs": elapsedMs,
+        "source": isStub ? "stub_debug" : "native_litertlm_success",
+        "modelId": runtime["loadedModelId"] as? String ?? filename ?? "unknown",
+        "backend": runtime["accelerator"] as? String ?? runtime["runtime"] as? String ?? "unknown",
+        "engineInitialized": !isStub
       ]
     }
 
@@ -135,10 +125,17 @@ public class CaremindGemmaModule: Module {
     }
 
     AsyncFunction("setStubMode") { (enabled: Bool) in
+      #if DEBUG
       self.engine.stubMode = enabled
       if enabled {
         self.engine.release()
       }
+      #else
+      self.engine.stubMode = false
+      if enabled {
+        NSLog("[CaremindGemma] stub mode is disabled in non-debug builds")
+      }
+      #endif
     }
   }
 
@@ -152,6 +149,108 @@ public class CaremindGemmaModule: Module {
       "ratio": ratio
     ])
   }
+
+  private func downloadModelFile(
+    filename: String,
+    sourceURL: URL,
+    checksum: String?,
+    expectedBytes: Int64?
+  ) async throws -> URL {
+    let targetURL = store.modelURL(filename)
+    let partialURL = store.partialModelURL(filename)
+    let maxAttempts = 4
+    var lastError: Error?
+
+    try store.prepareModelsDirectory()
+
+    for attempt in 1...maxAttempts {
+      if cancelledDownloads.contains(filename) {
+        throw CaremindGemmaError.downloadCancelled
+      }
+
+      let existingBytes = store.fileSizeIfExists(partialURL)
+      var request = URLRequest(url: sourceURL)
+      request.httpMethod = "GET"
+      request.timeoutInterval = 120
+      if existingBytes > 0 {
+        request.setValue("bytes=\(existingBytes)-", forHTTPHeaderField: "Range")
+      }
+
+      do {
+        let (tempURL, response) = try await URLSession.shared.download(for: request)
+        guard let http = response as? HTTPURLResponse else {
+          throw CaremindGemmaError.badServerResponse
+        }
+
+        let status = http.statusCode
+        let contentLength = IosModelStore.headerInt64(http.value(forHTTPHeaderField: "Content-Length")) ?? response.expectedContentLength
+        let retryCount = attempt - 1
+        print("[CaremindGemma] download attempt model=\(filename) host=\(http.url?.host ?? sourceURL.host ?? "unknown") status=\(status) contentLength=\(max(contentLength, 0)) retry=\(retryCount)")
+
+        guard (200...299).contains(status) else {
+          try? FileManager.default.removeItem(at: tempURL)
+          let error = CaremindGemmaError.httpStatus(status)
+          if status >= 500 && attempt < maxAttempts {
+            lastError = error
+            try await Task.sleep(nanoseconds: UInt64(min(attempt * 1_500, 6_000)) * 1_000_000)
+            continue
+          }
+          throw error
+        }
+
+        let resumed = existingBytes > 0 && status == 206
+        if existingBytes > 0 && status == 200 {
+          try? FileManager.default.removeItem(at: partialURL)
+        }
+        let offset = resumed ? existingBytes : 0
+        let serverTotal = IosModelStore.contentRangeTotal(http.value(forHTTPHeaderField: "Content-Range"))
+        let downloadedChunkBytes = try store.fileSize(tempURL)
+        let totalBytes = expectedBytes ?? serverTotal ?? (offset + downloadedChunkBytes)
+        try store.assertEnoughDiskSpace(bytesRemaining: max(totalBytes - offset, 0))
+
+        if resumed {
+          try store.appendFile(tempURL, to: partialURL)
+          try? FileManager.default.removeItem(at: tempURL)
+        } else {
+          try? FileManager.default.removeItem(at: partialURL)
+          try FileManager.default.moveItem(at: tempURL, to: partialURL)
+        }
+
+        let actualBytes = try store.fileSize(partialURL)
+        self.sendProgress(filename: filename, bytesDownloaded: actualBytes, totalBytes: max(totalBytes, actualBytes))
+        if totalBytes > 0 && actualBytes != totalBytes {
+          throw CaremindGemmaError.partialDownload("模型下载大小不完整：\(actualBytes) / \(totalBytes)")
+        }
+
+        if let checksum, !checksum.isEmpty {
+          let actualChecksum = try store.sha256(partialURL)
+          guard actualChecksum.lowercased() == checksum.lowercased() else {
+            try? FileManager.default.removeItem(at: partialURL)
+            throw CaremindGemmaError.checksumFailed
+          }
+        }
+
+        try? FileManager.default.removeItem(at: targetURL)
+        try FileManager.default.moveItem(at: partialURL, to: targetURL)
+        try store.excludeFromBackup(targetURL)
+        cancelledDownloads.remove(filename)
+        return targetURL
+      } catch let error as URLError {
+        let mapped: CaremindGemmaError = error.code == .timedOut ? .networkTimeout : .downloadFailed(error.localizedDescription)
+        if attempt == maxAttempts {
+          throw mapped
+        }
+        lastError = mapped
+      } catch {
+        if attempt == maxAttempts {
+          throw error
+        }
+        lastError = error
+      }
+    }
+
+    throw lastError ?? CaremindGemmaError.downloadFailed("unknown")
+  }
 }
 
 enum CaremindGemmaError: Error, LocalizedError {
@@ -159,6 +258,13 @@ enum CaremindGemmaError: Error, LocalizedError {
   case badUrl
   case modelNotFound
   case checksumFailed
+  case httpStatus(Int)
+  case badServerResponse
+  case networkTimeout
+  case insufficientDiskSpace(Int64, Int64)
+  case partialDownload(String)
+  case downloadFailed(String)
+  case downloadCancelled
   case localAudioNotSupported
   case modelLoadFailed(String)
   case contextInitFailed
@@ -176,6 +282,32 @@ enum CaremindGemmaError: Error, LocalizedError {
       return "当前选中的 iPhone 本地模型未就绪。"
     case .checksumFailed:
       return "模型文件校验失败，请重新下载。"
+    case .httpStatus(let status):
+      if status == 401 || status == 403 {
+        return "模型下载失败：HTTP \(status)，模型源鉴权或许可未通过。"
+      }
+      if status == 404 {
+        return "模型下载失败：HTTP 404，模型文件不存在。"
+      }
+      if status == 408 || status == 504 {
+        return "模型下载超时：HTTP \(status)，请保持网络连接后重试。"
+      }
+      if status >= 500 {
+        return "模型下载失败：服务器返回 HTTP \(status)。"
+      }
+      return "模型下载失败：HTTP \(status)。"
+    case .badServerResponse:
+      return "模型下载失败：服务器响应格式不正确。"
+    case .networkTimeout:
+      return "模型下载超时：网络不稳定或文件过大，请保持网络连接后重试。"
+    case .insufficientDiskSpace(let required, let available):
+      return "手机剩余空间不足：还需要约 \(required / 1024 / 1024)MB，可用约 \(available / 1024 / 1024)MB。"
+    case .partialDownload(let reason):
+      return "\(reason)，请重新点击下载继续。"
+    case .downloadFailed(let reason):
+      return "模型下载失败：\(reason)"
+    case .downloadCancelled:
+      return "下载已取消。"
     case .localAudioNotSupported:
       return "iPhone 隐私模式暂不支持本地语音转文字，请先手动输入，或明确选择云端转写。"
     case .modelLoadFailed(let reason):
@@ -256,10 +388,62 @@ final class IosModelStore {
     return Int64(values.fileSize ?? 0)
   }
 
+  func fileSizeIfExists(_ url: URL) -> Int64 {
+    guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+    return (try? fileSize(url)) ?? 0
+  }
+
+  func appendFile(_ sourceURL: URL, to targetURL: URL) throws {
+    if !FileManager.default.fileExists(atPath: targetURL.path) {
+      FileManager.default.createFile(atPath: targetURL.path, contents: nil)
+    }
+    let input = try FileHandle(forReadingFrom: sourceURL)
+    let output = try FileHandle(forWritingTo: targetURL)
+    defer {
+      try? input.close()
+      try? output.close()
+    }
+    try output.seekToEnd()
+    while autoreleasepool(invoking: {
+      let data = input.readData(ofLength: 1024 * 1024)
+      if data.isEmpty { return false }
+      output.write(data)
+      return true
+    }) {}
+  }
+
+  func assertEnoughDiskSpace(bytesRemaining: Int64) throws {
+    let directory = modelsDirectory()
+    let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+    let available = Int64(values.volumeAvailableCapacityForImportantUsage ?? 0)
+    let required = bytesRemaining + 512 * 1024 * 1024
+    guard available >= required else {
+      throw CaremindGemmaError.insufficientDiskSpace(required, available)
+    }
+  }
+
   func sha256(_ url: URL) throws -> String {
-    let data = try Data(contentsOf: url)
-    let digest = SHA256.hash(data: data)
-    return digest.map { String(format: "%02x", $0) }.joined()
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var hasher = SHA256()
+    while autoreleasepool(invoking: {
+      let data = handle.readData(ofLength: 1024 * 1024)
+      if data.isEmpty { return false }
+      hasher.update(data: data)
+      return true
+    }) {}
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+  }
+
+  static func headerInt64(_ value: String?) -> Int64? {
+    guard let value else { return nil }
+    return Int64(value.trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+
+  static func contentRangeTotal(_ value: String?) -> Int64? {
+    guard let value, let slash = value.lastIndex(of: "/") else { return nil }
+    let suffix = value[value.index(after: slash)...]
+    return Int64(suffix)
   }
 }
 
@@ -383,11 +567,18 @@ final class IosGemmaEngine {
   private var cancelled = false
 
   var stubMode = false
+  var isStubModeEnabled: Bool {
+    #if DEBUG
+    return stubMode
+    #else
+    return false
+    #endif
+  }
   private(set) var loadedModelId: String?
 
   func load(modelId: String, modelPath: String, options: [String: Any]?) async throws {
     setCancelled(false)
-    if stubMode {
+    if isStubModeEnabled {
       loadedModelId = modelId
       loadedOptions = nil
       return
@@ -434,7 +625,7 @@ final class IosGemmaEngine {
       return IosGemmaGeneration(text: IosGemmaEngine.cancelledXml, tokenCount: 0)
     }
 
-    if stubMode {
+    if isStubModeEnabled {
       let text = stubResponder.generate(prompt: prompt)
       return IosGemmaGeneration(text: text, tokenCount: max(1, text.count / 4))
     }
@@ -496,7 +687,7 @@ final class IosGemmaEngine {
   }
 
   private func currentRuntimeName() -> String {
-    if stubMode {
+    if isStubModeEnabled {
       return "stub"
     }
     if litertContext != nil {

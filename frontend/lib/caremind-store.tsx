@@ -811,12 +811,15 @@ function normalizeFollowupDocuments(documents: FollowupDocumentRecord[] | undefi
 
 function normalizeFollowupDocument(document: FollowupDocumentRecord): FollowupDocumentRecord {
   const now = new Date().toISOString();
+  const summary = document.summary ?? document.manualSummary ?? "";
   return {
     ...document,
     patientId: document.patientId ?? "local_patient",
     title: document.title || "复诊资料",
-    summary: document.summary ?? "",
+    summary,
+    manualSummary: document.manualSummary ?? summary,
     status: document.status ?? "reviewed",
+    parseQuality: document.parseQuality ?? document.parseResult?.parse_quality,
     confirmedItems: Array.isArray(document.confirmedItems) ? document.confirmedItems : undefined,
     createdAt: document.createdAt ?? now,
     updatedAt: now

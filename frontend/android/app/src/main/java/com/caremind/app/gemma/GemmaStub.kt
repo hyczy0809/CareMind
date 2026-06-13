@@ -4,7 +4,7 @@ import java.io.File
 
 /**
  * Dev-only stub. When stub mode is enabled, the React Native module bypasses
- * MediaPipe entirely and returns canned responses keyed by prompt fingerprint.
+ * LiteRT-LM entirely and returns canned responses keyed by prompt fingerprint.
  * Lets us verify the JS↔native wiring before real Gemma weights are hosted.
  *
  * Stub responses cover all four routed tasks. They are intentionally minimal

@@ -1,6 +1,6 @@
 import { Gemma, GEMMA_NATIVE_AVAILABLE } from "./gemma-native";
 import type { GemmaEngineOptions, GemmaGenerateResult, GemmaRuntimeInfo } from "./gemma-native";
-import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, DEFAULT_TOP_K } from "./constants";
+import { DEFAULT_TEMPERATURE, DEFAULT_TOP_K, GEMMA4_E2B_CONTEXT_TOKENS } from "./constants";
 
 export const GEMMA4_E2B_MODEL_ID = "gemma-4-E2B-it.litertlm";
 
@@ -24,10 +24,11 @@ export async function runGemma4E2BSmokePrompt(
 
   const engineOptions: GemmaEngineOptions = {
     backend: options.backend ?? "AUTO",
-    maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-    contextTokens: options.contextTokens ?? DEFAULT_MAX_TOKENS
+    maxTokens: options.maxTokens ?? 256,
+    contextTokens: options.contextTokens ?? GEMMA4_E2B_CONTEXT_TOKENS
   };
 
+  await Gemma.setStubMode(false);
   await Gemma.logMemorySnapshot("gemma4-smoke-before-load");
   await Gemma.initEngine(GEMMA4_E2B_MODEL_ID, engineOptions);
   await Gemma.logMemorySnapshot("gemma4-smoke-after-load");
@@ -38,6 +39,13 @@ export async function runGemma4E2BSmokePrompt(
     temperature: DEFAULT_TEMPERATURE,
     topK: DEFAULT_TOP_K
   });
+
+  if (result.source === "stub_debug") {
+    throw new Error("Gemma 4 E2B smoke failed: stub_debug output returned instead of native LiteRT-LM.");
+  }
+  if (!result.text.trim()) {
+    throw new Error("Gemma 4 E2B smoke failed: native LiteRT-LM returned empty output.");
+  }
 
   await Gemma.logMemorySnapshot("gemma4-smoke-after-generate");
 

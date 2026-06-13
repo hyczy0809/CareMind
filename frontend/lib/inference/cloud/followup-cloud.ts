@@ -9,6 +9,7 @@ import type { FollowupSummaryInput } from "../shared/types";
 export async function generateFollowupSummaryCloud(
   input: FollowupSummaryInput
 ): Promise<FollowupSummaryResponse> {
+  const startedAt = Date.now();
   const request: FollowupSummaryRequest = {
     patient_id: input.patientId,
     caregiver_id: input.caregiverId,
@@ -47,5 +48,22 @@ export async function generateFollowupSummaryCloud(
     timezone: input.timezone ?? "Asia/Shanghai"
   };
 
-  return postJson<FollowupSummaryResponse>("/api/reports/follow-up", request);
+  const response = await postJson<FollowupSummaryResponse>("/api/reports/follow-up", request);
+  return {
+    ...response,
+    inference_provenance: response.inference_provenance ?? {
+      source: "cloud_31b",
+      task: "follow_up_summary",
+      modelId: response.model_profile || "cloud_31b_long_context",
+      backend: "cloud",
+      latencyMs: Date.now() - startedAt,
+      engineInitialized: true,
+      nativeGenerateAttempted: false,
+      nativeGenerateReturned: false,
+      rawOutputLength: 0,
+      rawOutputHash: null,
+      parseSucceeded: true,
+      fallbackReason: null
+    }
+  };
 }

@@ -6,6 +6,7 @@ import * as DocumentPicker from "expo-document-picker";
 import {
   Check,
   ClipboardCheck,
+  Pencil,
   FileText,
   HelpCircle,
   ListChecks,
@@ -15,6 +16,8 @@ import {
 } from "lucide-react-native";
 import type {
   AttentionItem,
+  FollowupDocumentInputModality,
+  FollowupDocumentParseQuality,
   FollowupDocumentRecord,
   FollowupDocumentStatus,
   FollowupDocumentType,
@@ -30,6 +33,15 @@ import {
   uploadMedicalDocument
 } from "../../lib/care-workflow-api";
 import { usePrivacyMode } from "../../lib/inference/privacy-mode";
+import { sourceLabel } from "../../lib/inference/shared/provenance";
+import { TRACK_C_OFFLINE_DEMO } from "../../lib/inference/track-c-demo";
+import {
+  buildLocalDocumentParseResult as buildStoredLocalDocumentParseResult,
+  deletePersistedFollowupDocument,
+  extractLocalFollowupDocumentText,
+  localDocumentCapabilityLabel,
+  persistFollowupDocumentAsset
+} from "../../lib/local-followup-documents";
 import type { FollowupSummaryResponse } from "../../types/care-workflow";
 import { colors, hitSlop, typography } from "../../lib/theme";
 import { Button } from "../ui/Button";
@@ -93,6 +105,20 @@ function supplementStatusTone(status: FollowupDocumentStatus) {
   return "info" as const;
 }
 
+function parseQualityLabel(quality?: FollowupDocumentParseQuality) {
+  if (quality === "readable") return "可读";
+  if (quality === "partially_readable") return "家属已补充";
+  if (quality === "unreadable") return "无法可靠读取";
+  if (quality === "unsupported") return "待手动摘要";
+  return "未整理";
+}
+
+function modalityLabel(modality?: FollowupDocumentInputModality) {
+  if (modality === "image") return "图片/截图";
+  if (modality === "pdf") return "PDF";
+  if (modality === "docx") return "DOCX";
+  return "手动摘要";
+}
 
 function buildDoctorQuestions(items: AttentionItem[]) {
   const questions = items.flatMap((item) => {
@@ -188,8 +214,8 @@ function ReportSyncStatusCard({
       <Card tone="info">
         <Text style={styles.cardTitle}>正在整理复诊摘要</Text>
         <Text style={styles.body}>
-          {localFirst && !cloudSummaryConsent
-            ? "本地优先模式下，当前仅使用本机摘要，不上传原始记录或资料。"
+          {TRACK_C_OFFLINE_DEMO || (localFirst && !cloudSummaryConsent)
+            ? "当前仅使用本机短摘要，不上传原始记录或资料。"
             : "我会把已保存记录和已确认资料一起发送到摘要接口。"}
         </Text>
       </Card>
@@ -197,17 +223,24 @@ function ReportSyncStatusCard({
   }
 
   if (report) {
-    if (localFirst && !cloudSummaryConsent) {
+    const provenanceLabel = report.inference_provenance
+      ? sourceLabel(report.inference_provenance.source)
+      : report.model_profile;
+    if (TRACK_C_OFFLINE_DEMO || (localFirst && !cloudSummaryConsent)) {
       return (
         <Card tone="watch">
           <View style={styles.headerRow}>
             <ShieldCheck color={colors.status.watch} size={21} />
-            <Text style={styles.cardTitle}>本地优先摘要</Text>
+            <Text style={styles.cardTitle}>短本地摘要</Text>
           </View>
-          <Text style={styles.body}>当前摘要没有上传原始照护记录或资料。需要云端长上下文整理时，可单独确认本次处理。</Text>
-          <View style={styles.consentAction}>
-            <Button label="本次使用云端摘要" variant="secondary" onPress={onRequestCloudSummary} />
-          </View>
+          <Text style={styles.body}>
+            当前只使用已缓存的结构化记录、本机资料元数据和已确认家属摘要，没有运行 7/30 天本地长上下文推理，也没有上传原始记录或资料。来源：{provenanceLabel}。
+          </Text>
+          {!TRACK_C_OFFLINE_DEMO ? (
+            <View style={styles.consentAction}>
+              <Button label="本次使用云端摘要" variant="secondary" onPress={onRequestCloudSummary} />
+            </View>
+          ) : null}
         </Card>
       );
     }
@@ -215,7 +248,7 @@ function ReportSyncStatusCard({
     return (
       <Card tone="brand">
         <Text style={styles.cardTitle}>复诊摘要已同步</Text>
-        <Text style={styles.body}>摘要已包含照护记录、已确认资料和医疗边界说明。</Text>
+        <Text style={styles.body}>摘要已包含照护记录、已确认资料和医疗边界说明。来源：{provenanceLabel}。</Text>
       </Card>
     );
   }
@@ -225,7 +258,7 @@ function ReportSyncStatusCard({
       <Card tone="watch">
         <Text style={styles.cardTitle}>当前使用本地摘要</Text>
         <Text style={styles.body}>{error}</Text>
-        {localFirst && !cloudSummaryConsent ? (
+        {localFirst && !cloudSummaryConsent && !TRACK_C_OFFLINE_DEMO ? (
           <View style={styles.consentAction}>
             <Button label="本次使用云端摘要" variant="secondary" onPress={onRequestCloudSummary} />
           </View>
@@ -242,6 +275,11 @@ function DocumentSupplementEntryCard() {
   const [privacyOn] = usePrivacyMode();
   const [selectedType, setSelectedType] = useState<FollowupDocumentType>("clinic_note");
   const [manualSummary, setManualSummary] = useState("");
+  const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
+  const editingDocument = useMemo(
+    () => supplements.find((item) => item.id === editingDocumentId) ?? null,
+    [editingDocumentId, supplements]
+  );
 
   function selectedTypeLabel(type = selectedType) {
     return supplementTypeOptions.find((item) => item.value === type)?.label ?? "复诊资料";
@@ -249,6 +287,11 @@ function DocumentSupplementEntryCard() {
 
   function setSupplements(updater: (current: FollowupDocumentRecord[]) => FollowupDocumentRecord[]) {
     updateFollowupDocuments(updater);
+  }
+
+  function clearManualEntry() {
+    setManualSummary("");
+    setEditingDocumentId(null);
   }
 
   function requestDocumentCloudConsent(asset: DocumentPicker.DocumentPickerAsset): Promise<boolean> {
@@ -366,6 +409,90 @@ function DocumentSupplementEntryCard() {
           },
           ...current
         ]);
+        return;
+      }
+
+      if (TRACK_C_OFFLINE_DEMO) {
+        const now = new Date().toISOString();
+        const familySummary = manualSummary.trim();
+        const localId = `offline_supplement_${Date.now()}`;
+        const saved = await persistFollowupDocumentAsset(
+          {
+            uri: asset.uri,
+            name: asset.name,
+            mimeType: asset.mimeType,
+            size: asset.size
+          },
+          { hasManualSummary: !!familySummary }
+        );
+        const extraction = await extractLocalFollowupDocumentText({
+          localUri: saved.localUri,
+          filename: saved.filename,
+          mimeType: saved.mimeType,
+          modality: saved.inputModality
+        });
+        const summary = familySummary || extraction.summaryDraft;
+        const parseQuality = familySummary ? saved.parseQuality : extraction.parseQuality;
+        const parseResult = buildStoredLocalDocumentParseResult({
+          documentId: localId,
+          typeLabel: selectedTypeLabel(),
+          filename: saved.filename,
+          mimeType: saved.mimeType,
+          size: saved.size,
+          sha256: saved.sha256,
+          manualSummary: familySummary,
+          extractedText: extraction.summaryDraft || extraction.text,
+          extractionMethod: extraction.method,
+          modality: saved.inputModality,
+          parseQuality
+        });
+        const provenance = parseResult.inference_provenance;
+        setSupplements((current) => [
+          {
+            id: localId,
+            patientId: patient.id,
+            type: selectedType,
+            title: selectedTypeLabel(),
+            localUri: saved.localUri,
+            sha256: saved.sha256,
+            filename: saved.filename,
+            mimeType: saved.mimeType,
+            size: saved.size,
+            summary,
+            manualSummary: familySummary,
+            status: familySummary ? "reviewed" : "review_required",
+            inputModality: saved.inputModality,
+            parseQuality,
+            processingCapability: "local_metadata_manual_summary",
+            parseResult,
+            inferenceProvenance: provenance,
+            confirmedItems: familySummary
+              ? [
+                  `${selectedTypeLabel()}：${familySummary}`,
+                  `${localDocumentCapabilityLabel(saved.inputModality)}。`
+                ]
+              : undefined,
+            reviewedAt: familySummary ? now : undefined,
+            error: familySummary
+              ? undefined
+              : extraction.error ?? "文件已保存在本机；请确认本地抽取草稿或补充手动摘要。",
+            createdAt: now,
+            updatedAt: now
+          },
+          ...current
+        ]);
+        trackEvent("document_local_saved", {
+          document_type: selectedType,
+          has_summary: !!familySummary,
+          file_size: saved.size ?? null,
+          input_modality: saved.inputModality,
+          extraction_method: extraction.method,
+          extraction_quality: parseQuality,
+          sha256_prefix: saved.sha256.slice(0, 12),
+          offline_demo: true,
+          cloud_blocked: true
+        });
+        clearManualEntry();
         return;
       }
 
@@ -534,14 +661,73 @@ function DocumentSupplementEntryCard() {
       return;
     }
 
+    if (editingDocument) {
+      const reviewedAt = new Date().toISOString();
+      const parseQuality: FollowupDocumentParseQuality = editingDocument.localUri ? "partially_readable" : "readable";
+      const inputModality = editingDocument.inputModality ?? "manual";
+      const parseResult = buildStoredLocalDocumentParseResult({
+        documentId: editingDocument.documentId ?? editingDocument.id,
+        typeLabel: selectedTypeLabel(editingDocument.type),
+        filename: editingDocument.filename,
+        mimeType: editingDocument.mimeType,
+        size: editingDocument.size,
+        sha256: editingDocument.sha256,
+        manualSummary: summary,
+        modality: inputModality,
+        parseQuality
+      });
+      setSupplements((current) =>
+        current.map((item) =>
+          item.id === editingDocument.id
+            ? {
+                ...item,
+                summary,
+                manualSummary: summary,
+                status: "reviewed",
+                parseQuality,
+                parseResult,
+                inferenceProvenance: parseResult.inference_provenance,
+                confirmedItems: [`${item.title}：${summary}`, `${localDocumentCapabilityLabel(inputModality)}。`],
+                reviewedAt,
+                error: undefined,
+                updatedAt: reviewedAt
+              }
+            : item
+        )
+      );
+      trackEvent("document_review_confirmed", {
+        document_id: editingDocument.documentId ?? editingDocument.id,
+        document_type: editingDocument.type,
+        source: "manual_summary_edit",
+        cloud_blocked: TRACK_C_OFFLINE_DEMO
+      });
+      clearManualEntry();
+      return;
+    }
+
+    const localId = `manual_supplement_${Date.now()}`;
+    const parseResult = buildStoredLocalDocumentParseResult({
+      documentId: localId,
+      typeLabel: selectedTypeLabel(),
+      manualSummary: summary,
+      modality: "manual",
+      parseQuality: "readable"
+    });
+
     setSupplements((current) => [
       {
-        id: `manual_supplement_${Date.now()}`,
+        id: localId,
         patientId: patient.id,
         type: selectedType,
         title: selectedTypeLabel(),
         summary,
+        manualSummary: summary,
         status: "reviewed",
+        inputModality: "manual",
+        parseQuality: "readable",
+        processingCapability: "local_metadata_manual_summary",
+        parseResult,
+        inferenceProvenance: parseResult.inference_provenance,
         confirmedItems: [`家属手动补充：${summary}`],
         reviewedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
@@ -551,13 +737,20 @@ function DocumentSupplementEntryCard() {
     ]);
     trackEvent("document_review_confirmed", {
       document_type: selectedType,
-      source: "manual_summary"
+      source: "manual_summary",
+      cloud_blocked: TRACK_C_OFFLINE_DEMO
     });
-    setManualSummary("");
+    clearManualEntry();
+  }
+
+  function beginEditSummary(item: FollowupDocumentRecord) {
+    setSelectedType(item.type);
+    setManualSummary(item.manualSummary ?? item.summary ?? "");
+    setEditingDocumentId(item.id);
   }
 
   async function removeSupplement(item: FollowupDocumentRecord) {
-    if (item.documentId) {
+    if (item.documentId && !TRACK_C_OFFLINE_DEMO) {
       try {
         await deleteMedicalDocument(item.documentId);
       } catch (error) {
@@ -565,14 +758,49 @@ function DocumentSupplementEntryCard() {
         return;
       }
     }
+    await deletePersistedFollowupDocument(item.localUri);
     setSupplements((current) => current.filter((entry) => entry.id !== item.id));
     trackEvent("document_deleted", {
       document_id: item.documentId ?? item.id,
-      document_type: item.type
+      document_type: item.type,
+      local_file_deleted: !!item.localUri
     });
   }
 
   async function confirmSupplementReview(item: FollowupDocumentRecord) {
+    if (TRACK_C_OFFLINE_DEMO && item.parseResult) {
+      if (!item.summary.trim()) {
+        beginEditSummary(item);
+        Alert.alert("先补充摘要", "这份资料已保存在本机。请先补充 1-3 个关键信息点，再用于复诊材料。");
+        return;
+      }
+      const reviewedAt = new Date().toISOString();
+      setSupplements((current) =>
+        current.map((entry) =>
+          entry.id === item.id
+            ? {
+                ...entry,
+                status: "reviewed",
+                confirmedItems: item.parseResult?.followup_summary_items ?? [],
+                manualSummary: item.summary,
+                parseQuality: item.parseResult?.parse_quality ?? item.parseQuality,
+                inferenceProvenance: item.parseResult?.inference_provenance ?? item.inferenceProvenance,
+                reviewedAt,
+                error: undefined,
+                updatedAt: reviewedAt
+              }
+            : entry
+        )
+      );
+      trackEvent("document_review_confirmed", {
+        document_id: item.documentId ?? item.id,
+        document_type: item.type,
+        confirmed_count: item.parseResult.followup_summary_items.length,
+        offline_demo: true
+      });
+      return;
+    }
+
     if (!item.documentId || !item.parseResult) {
       return;
     }
@@ -642,7 +870,7 @@ function DocumentSupplementEntryCard() {
         })}
       </View>
 
-      <Text style={styles.formLabel}>资料摘要</Text>
+      <Text style={styles.formLabel}>{editingDocument ? `编辑摘要：${editingDocument.title}` : "资料摘要"}</Text>
       <TextInput
         accessibilityLabel="复诊资料摘要"
         multiline
@@ -656,7 +884,9 @@ function DocumentSupplementEntryCard() {
 
       <View style={styles.documentBoundaryBox}>
         <Text style={styles.documentBoundaryText}>
-          {privacyOn
+          {TRACK_C_OFFLINE_DEMO
+            ? "Track C 离线 demo：资料会复制到本机私有目录并生成 SHA-256；本轮以本地元数据和家属摘要进入复诊材料，不调用云端资料接口。"
+            : privacyOn
             ? "本地优先模式已开启。文件不会自动上传；选择文件后需确认本次云端整理，也可以只保存手动摘要。"
             : "上传资料可能包含敏感健康信息。CareMind 只做资料整理和术语辅助，不判断是否需要检查，也不调整用药。"}
         </Text>
@@ -664,11 +894,12 @@ function DocumentSupplementEntryCard() {
 
       <View style={styles.documentActions}>
         <Button
-          label={privacyOn ? "确认并选择文件" : "选择文件"}
-          icon={<UploadCloud color="#FFFFFF" size={19} />}
+          label={TRACK_C_OFFLINE_DEMO ? "本地保存文件" : privacyOn ? "确认并选择文件" : "选择文件"}
+          icon={TRACK_C_OFFLINE_DEMO ? <FileText color="#FFFFFF" size={19} /> : <UploadCloud color="#FFFFFF" size={19} />}
           onPress={pickDocument}
         />
-        <Button label="只保存摘要" variant="secondary" onPress={addManualSummary} />
+        <Button label={editingDocument ? "保存摘要" : "只保存摘要"} variant="secondary" onPress={addManualSummary} />
+        {editingDocument ? <Button label="取消编辑" variant="ghost" onPress={clearManualEntry} /> : null}
       </View>
 
       {supplements.length > 0 ? (
@@ -687,6 +918,15 @@ function DocumentSupplementEntryCard() {
                 ) : (
                   <Text style={styles.supplementMeta}>手动填写摘要</Text>
                 )}
+                <Text style={styles.supplementMeta}>
+                  {item.localUri ? "本机已保存" : item.documentId ? "云端资料" : "本地记录"} · {modalityLabel(item.inputModality)} · {parseQualityLabel(item.parseQuality)}
+                </Text>
+                {item.sha256 ? (
+                  <Text style={styles.supplementMeta}>SHA-256 {item.sha256.slice(0, 12)}...{item.sha256.slice(-8)}</Text>
+                ) : null}
+                {item.inferenceProvenance ? (
+                  <Text style={styles.supplementMeta}>来源：{sourceLabel(item.inferenceProvenance.source)}</Text>
+                ) : null}
                 {item.summary ? <Text style={styles.supplementSummary}>{item.summary}</Text> : null}
                 {item.error ? <Text style={styles.supplementError}>{item.error}</Text> : null}
                 {item.parseResult ? (
@@ -707,15 +947,15 @@ function DocumentSupplementEntryCard() {
                       </Text>
                     ))}
                     <Text style={styles.boundaryText}>{item.parseResult.medical_boundary}</Text>
-                    {item.status === "review_required" ? (
-                      <View style={styles.reviewAction}>
-                        <Button
-                          label="确认并用于复诊"
-                          variant="secondary"
-                          onPress={() => void confirmSupplementReview(item)}
-                        />
-                      </View>
-                    ) : null}
+	                    {item.status === "review_required" ? (
+	                      <View style={styles.reviewAction}>
+	                        <Button
+	                          label={item.summary ? "确认并用于复诊" : "补充摘要"}
+	                          variant="secondary"
+	                          onPress={() => void confirmSupplementReview(item)}
+	                        />
+	                      </View>
+	                    ) : null}
                   </View>
                 ) : null}
                 {item.confirmedItems?.length ? (
@@ -727,7 +967,17 @@ function DocumentSupplementEntryCard() {
                       </Text>
                     ))}
                   </View>
-                ) : null}
+	                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`编辑${item.title}摘要`}
+                  hitSlop={hitSlop}
+                  onPress={() => beginEditSummary(item)}
+                  style={styles.editSummaryButton}
+                >
+                  <Pencil color={colors.status.info} size={15} />
+                  <Text style={styles.editSummaryText}>编辑摘要</Text>
+                </Pressable>
               </View>
               <Pressable
                 accessibilityRole="button"
@@ -914,7 +1164,7 @@ export function FollowupPrepScreen() {
   const hasReportContent = recordCount > 0 || reviewedFollowupDocuments.length > 0;
 
   useEffect(() => {
-    if (privacyOn) {
+    if (privacyOn || TRACK_C_OFFLINE_DEMO) {
       setCloudSummaryConsent(false);
     }
   }, [privacyOn]);
@@ -942,8 +1192,8 @@ export function FollowupPrepScreen() {
           memoryItems,
           followupDocuments: reviewedFollowupDocuments,
           includeEnglishKeyPhrases: true,
-          cloudSummaryAllowed: !privacyOn || cloudSummaryConsent,
-          rawTextUploadAllowed: !privacyOn || cloudSummaryConsent,
+          cloudSummaryAllowed: !TRACK_C_OFFLINE_DEMO && (!privacyOn || cloudSummaryConsent),
+          rawTextUploadAllowed: !TRACK_C_OFFLINE_DEMO && (!privacyOn || cloudSummaryConsent),
           fullWindowRequired: true
         });
 
@@ -955,8 +1205,8 @@ export function FollowupPrepScreen() {
           attention_count: attentionItems.length,
           document_count: reviewedFollowupDocuments.length,
           source: response.model_profile,
-          local_first: privacyOn,
-          cloud_consent: privacyOn ? (cloudSummaryConsent ? "explicit" : "none") : "standard"
+          local_first: TRACK_C_OFFLINE_DEMO || privacyOn,
+          cloud_consent: TRACK_C_OFFLINE_DEMO ? "offline_demo_disabled" : privacyOn ? (cloudSummaryConsent ? "explicit" : "none") : "standard"
         });
       } catch (error) {
         if (cancelled) return;
@@ -993,6 +1243,11 @@ export function FollowupPrepScreen() {
   ]);
 
   function requestCloudSummaryConsent() {
+    if (TRACK_C_OFFLINE_DEMO) {
+      Alert.alert("Track C 离线 demo", "比赛演示路径不会调用云端摘要。当前只生成本地短复诊摘要。");
+      return;
+    }
+
     trackEvent("privacy_cloud_consent_prompted", {
       intent: "follow_up_summary",
       local_first: privacyOn,
@@ -1118,7 +1373,7 @@ export function FollowupPrepScreen() {
             loading={reportLoading}
             error={reportError}
             report={report}
-            localFirst={privacyOn}
+            localFirst={TRACK_C_OFFLINE_DEMO || privacyOn}
             cloudSummaryConsent={cloudSummaryConsent}
             onRequestCloudSummary={requestCloudSummaryConsent}
           />
@@ -1360,6 +1615,22 @@ const styles = StyleSheet.create({
     ...typography.small,
     color: colors.brand.primaryDark,
     marginTop: 3
+  },
+  editSummaryButton: {
+    alignSelf: "flex-start",
+    minHeight: 34,
+    borderRadius: 17,
+    paddingHorizontal: 10,
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.statusSoft.info
+  },
+  editSummaryText: {
+    ...typography.small,
+    color: colors.status.info,
+    fontWeight: "800" as const
   },
   deleteButton: {
     width: 38,

@@ -4,12 +4,13 @@
 // inference router so call sites do not need to know whether the call lands
 // on the cloud backend or on-device Gemma.
 //
-// Document-related functions stay here — they are cloud-only by design
-// (file storage and parsing happen server-side; nothing the on-device model
-// can replace).
+// Document-related functions stay here. In Track C offline demo mode these
+// helpers refuse to call the backend; the UI stores a local manual summary
+// instead of uploading or parsing files.
 
 import { buildApiUrl, readableApiError } from "./inference/shared/http";
 import { isPrivacyMode } from "./inference/privacy-mode";
+import { TRACK_C_OFFLINE_DEMO } from "./inference/track-c-demo";
 
 export {
   runCareWorkflow,
@@ -145,6 +146,14 @@ export class PrivacyUploadBlockedError extends Error {
 }
 
 async function assertCloudDocumentProcessingAllowed(confirmed: boolean | undefined, action: "upload" | "parse") {
+  if (TRACK_C_OFFLINE_DEMO) {
+    throw new PrivacyUploadBlockedError(
+      action === "upload"
+        ? "Track C 离线 demo 模式已开启：资料不会上传云端，请保存本地文件和手动摘要。"
+        : "Track C 离线 demo 模式已开启：资料不会云端解析，请使用手动摘要。"
+    );
+  }
+
   const localFirst = await isPrivacyMode();
   if (!localFirst || confirmed === true) {
     return {
@@ -191,6 +200,10 @@ export async function uploadMedicalDocument(
 }
 
 export async function getMedicalDocument(documentId: string): Promise<MedicalDocumentRecord> {
+  if (TRACK_C_OFFLINE_DEMO) {
+    throw new PrivacyUploadBlockedError("Track C 离线 demo 模式不会查询云端资料状态。");
+  }
+
   const response = await fetch(buildApiUrl(`/api/documents/${documentId}`));
   if (!response.ok) {
     throw new Error(await readableApiError(response, "资料状态查询失败"));
@@ -219,6 +232,10 @@ export async function parseMedicalDocument(
 export async function confirmMedicalDocumentReview(
   input: ConfirmDocumentReviewInput
 ): Promise<ConfirmDocumentReviewResponse> {
+  if (TRACK_C_OFFLINE_DEMO) {
+    throw new PrivacyUploadBlockedError("Track C 离线 demo 模式不会向云端确认资料。");
+  }
+
   const response = await fetch(buildApiUrl(`/api/documents/${input.documentId}/review`), {
     method: "POST",
     headers: {
@@ -238,6 +255,10 @@ export async function confirmMedicalDocumentReview(
 }
 
 export async function deleteMedicalDocument(documentId: string): Promise<void> {
+  if (TRACK_C_OFFLINE_DEMO) {
+    throw new PrivacyUploadBlockedError("Track C 离线 demo 模式不会向云端删除资料。");
+  }
+
   const response = await fetch(buildApiUrl(`/api/documents/${documentId}`), {
     method: "DELETE"
   });

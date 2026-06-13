@@ -2,9 +2,10 @@ import hashlib
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 import uvicorn
@@ -832,7 +833,7 @@ GEMMA_MODEL_DIR = Path(
     )
 ).resolve()
 GEMMA_MODEL_EXTENSIONS = {".litertlm", ".task"}
-GEMMA_MODEL_DOWNLOAD_MODE = os.environ.get("CAREMIND_MODEL_DOWNLOAD_MODE", "proxy").lower()
+GEMMA_MODEL_DOWNLOAD_MODE = os.environ.get("CAREMIND_MODEL_DOWNLOAD_MODE", "direct").lower()
 GEMMA_MODEL_REMOTE_TOKEN = (
     os.environ.get("CAREMIND_HF_TOKEN")
     or os.environ.get("HUGGINGFACE_TOKEN")
@@ -840,8 +841,10 @@ GEMMA_MODEL_REMOTE_TOKEN = (
 )
 GEMMA_GCS_MODEL_BUCKET = os.environ.get("CAREMIND_GCS_MODEL_BUCKET", "").strip()
 GEMMA_GCS_MODEL_PREFIX = os.environ.get("CAREMIND_GCS_MODEL_PREFIX", "models").strip("/")
-GEMMA_GCS_MODEL_DELIVERY = os.environ.get("CAREMIND_GCS_MODEL_DELIVERY", "redirect").lower()
+GEMMA_GCS_MODEL_DELIVERY = os.environ.get("CAREMIND_GCS_MODEL_DELIVERY", "signed").lower()
 GEMMA_GCS_DYNAMIC_CATALOG = os.environ.get("CAREMIND_GCS_DYNAMIC_CATALOG", "1").lower() not in {"0", "false", "no"}
+GEMMA_MODEL_SIGNED_URL_TTL_SECONDS = int(os.environ.get("CAREMIND_MODEL_SIGNED_URL_TTL_SECONDS", "3600"))
+GEMMA_ALLOW_MODEL_PROXY = os.environ.get("CAREMIND_ALLOW_MODEL_PROXY", "0").lower() in {"1", "true", "yes"}
 GEMMA_RECOMMENDED_MODEL_ID = "gemma-4-E2B-it.litertlm"
 GEMMA_REMOTE_MODEL_IDS = {
     item.strip()
@@ -865,6 +868,7 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "runtime": "mediapipe-llm",
         "download_url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm?download=true",
         "size_bytes": 587_000_000,
+        "checksum_sha256": "1325ae366d31950f137c9c357b9fa89448b176d76998180c08ceaca78bba98be",
     },
     "gemma-4-E2B-it.litertlm": {
         "display_name": "Gemma 4 E2B",
@@ -878,6 +882,7 @@ GEMMA_MODEL_REGISTRY: dict[str, dict] = {
         "recommended": True,
         "download_url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true",
         "size_bytes": 2_588_147_712,
+        "checksum_sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
     },
     "gemma-4-E4B-it.litertlm": {
         "display_name": "Gemma 4 E4B",
@@ -901,6 +906,24 @@ def _format_model_size(size_bytes: int) -> str:
     if mb < 1024:
         return f"{mb:.1f} MB"
     return f"{mb / 1024:.2f} GB"
+
+
+def _safe_url_host(url: str) -> str:
+    try:
+        return urlparse(url).netloc or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _model_log(event: str, **fields: Any) -> None:
+    safe_fields = []
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key in {"url", "download_url", "token", "authorization"}:
+            continue
+        safe_fields.append(f"{key}={value}")
+    print(f"[models] {event} " + " ".join(safe_fields))
 
 
 def _infer_model_display_name(filename: str) -> str:
@@ -971,6 +994,8 @@ def _build_model_entry(path: Path) -> dict:
         "recommended": bool(registry.get("recommended", path.name == GEMMA_RECOMMENDED_MODEL_ID)),
         "checksum_sha256": registry.get("checksum_sha256"),
         "download_path": f"/api/models/{path.name}",
+        "download_info_path": f"/api/models/{path.name}/download-info",
+        "delivery": "backend-local",
         "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
     }
 
@@ -998,7 +1023,9 @@ def _build_registry_model_entry(filename: str) -> dict:
         "recommended": bool(registry.get("recommended", filename == GEMMA_RECOMMENDED_MODEL_ID)),
         "checksum_sha256": registry.get("checksum_sha256"),
         "download_path": f"/api/models/{filename}",
-        "modified_at": "gcs" if GEMMA_GCS_MODEL_BUCKET else "remote",
+        "download_info_path": f"/api/models/{filename}/download-info",
+        "delivery": "remote-direct",
+        "modified_at": "remote",
     }
 
 
@@ -1023,6 +1050,8 @@ def _build_gcs_model_entry(filename: str, size_bytes: int, updated_at: datetime 
         "recommended": bool(registry.get("recommended", filename == GEMMA_RECOMMENDED_MODEL_ID)),
         "checksum_sha256": registry.get("checksum_sha256"),
         "download_path": f"/api/models/{filename}",
+        "download_info_path": f"/api/models/{filename}/download-info",
+        "delivery": "gcs-signed-url",
         "modified_at": updated_at.isoformat() if updated_at else "gcs",
     }
 
@@ -1088,6 +1117,163 @@ def _build_gcs_model_entry_from_metadata(filename: str) -> dict:
     return _build_gcs_model_entry(filename, int(blob.size or 0), blob.updated)
 
 
+def _get_gcs_blob_for_model(filename: str):
+    if not _has_gcs_model_config(filename):
+        raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
+    try:
+        from google.cloud import storage
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="后端缺少 google-cloud-storage 依赖，无法访问 Cloud Storage 模型。") from exc
+
+    object_name = _gcs_model_object_name(filename)
+    try:
+        blob = storage.Client().bucket(GEMMA_GCS_MODEL_BUCKET).blob(object_name)
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail=f"Cloud Storage 中未找到模型文件：gs://{GEMMA_GCS_MODEL_BUCKET}/{object_name}")
+        blob.reload()
+        return blob
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"无法访问 Cloud Storage 模型文件：{exc.__class__.__name__}") from exc
+
+
+def _generate_gcs_signed_url(blob, filename: str) -> tuple[str, datetime]:
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=GEMMA_MODEL_SIGNED_URL_TTL_SECONDS)
+    response_disposition = f'attachment; filename="{filename}"'
+    try:
+        return (
+            blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=GEMMA_MODEL_SIGNED_URL_TTL_SECONDS),
+                method="GET",
+                response_disposition=response_disposition,
+            ),
+            expires_at,
+        )
+    except Exception as first_exc:
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+
+            credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            credentials.refresh(GoogleAuthRequest())
+            service_account_email = getattr(credentials, "service_account_email", None)
+            return (
+                blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(seconds=GEMMA_MODEL_SIGNED_URL_TTL_SECONDS),
+                    method="GET",
+                    response_disposition=response_disposition,
+                    credentials=credentials,
+                    service_account_email=service_account_email,
+                    access_token=credentials.token,
+                ),
+                expires_at,
+            )
+        except Exception as second_exc:
+            _model_log(
+                "signed_url_failed",
+                model_id=filename,
+                source="gcs",
+                first_error=first_exc.__class__.__name__,
+                second_error=second_exc.__class__.__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="无法生成模型下载签名链接。请确认 Cloud Run 服务账号拥有 Storage Object Viewer 和 Service Account Token Creator/签名权限。",
+            ) from second_exc
+
+
+def _build_download_info(
+    filename: str,
+    url: str,
+    source: str,
+    size_bytes: int,
+    checksum_sha256: str | None = None,
+    expires_at: datetime | None = None,
+    status_code: int = 200,
+) -> dict:
+    return {
+        "model_id": filename,
+        "filename": filename,
+        "download_url": url,
+        "url_host": _safe_url_host(url),
+        "source": source,
+        "status": "ready",
+        "status_code": status_code,
+        "size_bytes": size_bytes,
+        "checksum_sha256": checksum_sha256,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "requires_auth": False,
+        "via_backend_proxy": source in {"backend-local", "remote-proxy", "gcs-proxy"},
+    }
+
+
+def _gcs_download_info(filename: str) -> dict:
+    blob = _get_gcs_blob_for_model(filename)
+    if GEMMA_GCS_MODEL_DELIVERY == "proxy" and GEMMA_ALLOW_MODEL_PROXY:
+        url = f"/api/models/{filename}"
+        source = "gcs-proxy"
+        expires_at = None
+    else:
+        url, expires_at = _generate_gcs_signed_url(blob, filename)
+        source = "gcs-signed-url"
+    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+    return _build_download_info(
+        filename=filename,
+        url=url,
+        source=source,
+        size_bytes=int(blob.size or registry.get("size_bytes", 0)),
+        checksum_sha256=registry.get("checksum_sha256"),
+        expires_at=expires_at,
+    )
+
+
+def _remote_download_info(filename: str) -> dict:
+    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+    remote_url = str(registry.get("download_url") or "").strip()
+    if not remote_url:
+        raise HTTPException(status_code=404, detail=f"模型文件不存在：{filename}")
+    if GEMMA_MODEL_REMOTE_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="该模型源需要鉴权，移动端不能安全直连。请先把模型同步到 Cloud Storage，再用签名链接下载。",
+        )
+    return _build_download_info(
+        filename=filename,
+        url=remote_url,
+        source="remote-direct",
+        size_bytes=int(registry.get("size_bytes", 0)),
+        checksum_sha256=registry.get("checksum_sha256"),
+    )
+
+
+def _resolve_download_info(filename: str) -> dict:
+    try:
+        path = _resolve_model_file(filename)
+        registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+        return _build_download_info(
+            filename=filename,
+            url=f"/api/models/{filename}",
+            source="backend-local",
+            size_bytes=path.stat().st_size,
+            checksum_sha256=registry.get("checksum_sha256"),
+        )
+    except HTTPException as local_exc:
+        if local_exc.status_code != 404:
+            raise
+    registry = GEMMA_MODEL_REGISTRY.get(filename, {})
+    if _has_gcs_model_config(filename):
+        try:
+            return _gcs_download_info(filename)
+        except HTTPException as gcs_exc:
+            if gcs_exc.status_code != 404 or not registry.get("download_url"):
+                raise
+            return _remote_download_info(filename)
+    return _remote_download_info(filename)
+
+
 def _model_sort_key(entry: dict) -> tuple:
     tier_order = {"light": 0, "medium": 1, "full": 2, "unknown": 3}
     return (
@@ -1143,6 +1329,21 @@ async def model_meta(filename: str):
         raise
 
 
+@app.get("/api/models/{filename}/download-info")
+async def model_download_info(filename: str):
+    info = _resolve_download_info(filename)
+    _model_log(
+        "download_info",
+        model_id=filename,
+        source=info.get("source"),
+        url_host=info.get("url_host"),
+        status_code=info.get("status_code"),
+        content_length=info.get("size_bytes"),
+        via_backend_proxy=info.get("via_backend_proxy"),
+    )
+    return info
+
+
 @app.get("/api/models/{filename}")
 async def model_download(filename: str, request: Request):
     return await _model_download_impl(filename, request)
@@ -1152,9 +1353,9 @@ async def _model_download_impl(filename: str, request: Request | None = None):
     """Serve a specific on-device weight file.
 
     Local files are always preferred. This keeps the APK-compatible
-    `/api/models/<filename>` URL stable while avoiding gated HuggingFace URLs
-    being exposed to phones. If a registry-only model is requested and the
-    file is not present, the backend returns a clear setup error.
+    `/api/models/<filename>` URL stable while avoiding Cloud Run streaming
+    for multi-GB files. Local files may still stream from the backend; GCS and
+    remote registry entries redirect to a direct download URL.
     """
     try:
         path = _resolve_model_file(filename)
@@ -1166,9 +1367,9 @@ async def _model_download_impl(filename: str, request: Request | None = None):
             except HTTPException as gcs_exc:
                 if gcs_exc.status_code != 404 or not registry.get("download_url"):
                     raise
-                return await _proxy_remote_model(filename, request)
+                return _redirect_remote_model(filename)
         if exc.status_code == 404 and registry.get("download_url"):
-            return await _proxy_remote_model(filename, request)
+            return _redirect_remote_model(filename)
         raise
     size_bytes = path.stat().st_size
 
@@ -1196,6 +1397,8 @@ async def _model_download_impl(filename: str, request: Request | None = None):
 
 
 async def _proxy_remote_model(filename: str, request: Request | None = None):
+    if not GEMMA_ALLOW_MODEL_PROXY:
+        return _redirect_remote_model(filename)
     registry = GEMMA_MODEL_REGISTRY.get(filename, {})
     remote_url = str(registry.get("download_url") or "").strip()
     if not remote_url:
@@ -1261,13 +1464,33 @@ async def _proxy_remote_model(filename: str, request: Request | None = None):
     )
 
 
+def _redirect_remote_model(filename: str):
+    info = _remote_download_info(filename)
+    from fastapi.responses import RedirectResponse
+
+    _model_log(
+        "redirect_remote",
+        model_id=filename,
+        source=info.get("source"),
+        url_host=info.get("url_host"),
+        content_length=info.get("size_bytes"),
+    )
+    return RedirectResponse(info["download_url"], status_code=302)
+
+
 def _deliver_gcs_model(filename: str):
-    if GEMMA_GCS_MODEL_DELIVERY != "proxy":
+    if GEMMA_GCS_MODEL_DELIVERY != "proxy" or not GEMMA_ALLOW_MODEL_PROXY:
+        info = _gcs_download_info(filename)
         from fastapi.responses import RedirectResponse
 
-        object_name = _gcs_model_object_name(filename)
-        public_url = f"https://storage.googleapis.com/{GEMMA_GCS_MODEL_BUCKET}/{object_name}"
-        return RedirectResponse(public_url, status_code=302)
+        _model_log(
+            "redirect_gcs",
+            model_id=filename,
+            source=info.get("source"),
+            url_host=info.get("url_host"),
+            content_length=info.get("size_bytes"),
+        )
+        return RedirectResponse(info["download_url"], status_code=302)
     return _stream_gcs_model(filename)
 
 
@@ -1350,6 +1573,7 @@ async def legacy_gemma_download():
 #   output_chars    int (>=0) — length only, no content
 #   fell_back       bool — whether the local adapter dropped to its regex fallback
 #   error_kind      optional, short string like "json_parse_failed", "engine_init_failed"
+#   source/backend/raw_output_hash — short provenance strings only, no content
 #
 # What is explicitly REJECTED so this cannot become a leak vector:
 #   any field longer than 64 chars; nested objects / arrays; unknown fields.
@@ -1363,12 +1587,20 @@ class OnDeviceTelemetry(BaseModel):
     output_chars: int = 0
     fell_back: bool = False
     error_kind: str | None = None
+    source: str | None = None
+    backend: str | None = None
+    raw_output_hash: str | None = None
 
 
 @app.post("/api/telemetry/ondevice")
 async def on_device_telemetry(payload: OnDeviceTelemetry):
     if len(payload.model_id) > 128 or any(
-        len(s) > 64 for s in [payload.error_kind or ""]
+        len(s) > 64 for s in [
+            payload.error_kind or "",
+            payload.source or "",
+            payload.backend or "",
+            payload.raw_output_hash or "",
+        ]
     ):
         raise HTTPException(status_code=400, detail="字段过长，拒绝接收")
     if payload.elapsed_ms < 0 or payload.input_chars < 0 or payload.output_chars < 0:
@@ -1377,10 +1609,13 @@ async def on_device_telemetry(payload: OnDeviceTelemetry):
     status = "ok" if payload.success else "fail"
     fb = " fallback" if payload.fell_back else ""
     err = f" err={payload.error_kind}" if payload.error_kind else ""
+    source = f" source={payload.source}" if payload.source else ""
+    backend = f" backend={payload.backend}" if payload.backend else ""
+    raw_hash = f" raw_hash={payload.raw_output_hash}" if payload.raw_output_hash else ""
     print(
         f"[ondevice] task={payload.task} model={payload.model_id} {status}{fb}"
         f" elapsed={payload.elapsed_ms}ms in={payload.input_chars}c"
-        f" out={payload.output_chars}c{err}",
+        f" out={payload.output_chars}c{err}{source}{backend}{raw_hash}",
         flush=True,
     )
     return {"received": True}

@@ -19,6 +19,7 @@
     extractNativeLibs=false 在 API 23+ 让系统直接 mmap APK 中的 .so，省去解压拷贝，启动更快、占用更少。
   -->
   <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:largeHeap="true" android:hardwareAccelerated="true" android:extractNativeLibs="false" android:theme="@style/AppTheme" android:supportsRtl="true">
+    <uses-native-library android:name="libvndksupport.so" android:required="false"/>
     <uses-native-library android:name="libOpenCL.so" android:required="false"/>
     <uses-native-library android:name="libOpenCL-car.so" android:required="false"/>
     <uses-native-library android:name="libOpenCL-pixel.so" android:required="false"/>

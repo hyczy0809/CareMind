@@ -17,6 +17,7 @@ import {
 import { useCareMind } from "../../lib/caremind-store";
 import { transcribeAudioNote } from "../../lib/care-workflow-api";
 import { isPrivacyMode } from "../../lib/inference/privacy-mode";
+import { TRACK_C_OFFLINE_DEMO } from "../../lib/inference/track-c-demo";
 import {
   ANDROID_SPEECH_RECOGNITION_AVAILABLE,
   cancelAndroidSpeechRecognition,
@@ -414,7 +415,7 @@ function ConcernVoiceButton({
     setVoiceHint("正在请求麦克风权限……");
 
     try {
-      if (await isPrivacyMode()) {
+      if ((await isPrivacyMode()) && !TRACK_C_OFFLINE_DEMO) {
         setVoiceState("unsupported");
         setVoiceHint("隐私模式下暂不启用语音转文字。你可以先手动输入，或关闭隐私模式后使用系统语音识别。");
         onTrackVoiceEvent("voice_input_unsupported", {
@@ -444,7 +445,11 @@ function ConcernVoiceButton({
       }
 
       await startAndroidSpeechRecognition("zh-CN");
-      setVoiceHint("正在听，松手后我会转成文字。");
+      setVoiceHint(
+        TRACK_C_OFFLINE_DEMO
+          ? "正在听，松手后会用手机系统语音识别转成文字；之后进入本地照护整理。"
+          : "正在听，松手后我会转成文字。"
+      );
       onTrackVoiceEvent("voice_input_started", {
         platform: Platform.OS,
         entry: "onboarding_concern",
@@ -501,7 +506,7 @@ function ConcernVoiceButton({
     recordingRef.current = null;
     nativeStopRequestedRef.current = false;
     setVoiceState("transcribing");
-    setVoiceHint("正在上传并转成文字……");
+    setVoiceHint("正在转成文字……");
 
     try {
       await recording.stopAndUnloadAsync();
@@ -545,6 +550,16 @@ function ConcernVoiceButton({
   }
 
   function startVoiceInput() {
+    if (TRACK_C_OFFLINE_DEMO && Platform.OS !== "android") {
+      setVoiceState("unsupported");
+      setVoiceHint("Track C 离线 demo 目前只在 Android 使用系统语音转文字；其他平台请先手动输入。");
+      onTrackVoiceEvent("voice_input_unsupported", {
+        platform: Platform.OS,
+        entry: "onboarding_concern",
+        reason: "track_c_audio_requires_android_system_speech"
+      });
+      return;
+    }
     if (Platform.OS === "web") {
       startWebSpeechInput();
       return;

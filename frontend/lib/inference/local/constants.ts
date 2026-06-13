@@ -26,9 +26,28 @@ export function buildModelMetaUrl(filename: string): string {
 // /api/models registry so release builds never fall back to Hugging Face.
 export const DEFAULT_MODEL_FILENAME = "gemma-4-E2B-it.litertlm";
 
-// Inference knobs. Keep modest — the model can blow past the JSON schema if
-// it runs free, especially on the smaller 1B variant.
+function readPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// Inference knobs. Keep generated output modest — the model can blow past the
+// JSON/XML schema if it runs free, especially on the smaller 1B variant.
 export const DEFAULT_MAX_TOKENS = 768;
+export const DEFAULT_CONTEXT_TOKENS = readPositiveInt(
+  process.env.EXPO_PUBLIC_LOCAL_CONTEXT_TOKENS,
+  2048
+);
+export const GEMMA4_E2B_CONTEXT_TOKENS = readPositiveInt(
+  process.env.EXPO_PUBLIC_GEMMA4_E2B_CONTEXT_TOKENS,
+  4096
+);
 export const TRANSCRIPTION_MAX_TOKENS = 512;
 export const DEFAULT_TEMPERATURE = 0.4;
 export const DEFAULT_TOP_K = 40;
+
+export function defaultContextTokensForModel(filename: string): number {
+  return filename.toLowerCase().includes("gemma-4-e2b")
+    ? GEMMA4_E2B_CONTEXT_TOKENS
+    : DEFAULT_CONTEXT_TOKENS;
+}

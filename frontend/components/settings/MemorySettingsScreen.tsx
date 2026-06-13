@@ -50,6 +50,7 @@ function eventLabel(name: AnalyticsEvent["name"]) {
     followup_copy_succeeded: "复制复诊摘要成功",
     followup_copy_failed: "复制复诊摘要失败",
     document_upload_started: "开始上传复诊资料",
+    document_local_saved: "本机保存复诊资料",
     document_upload_succeeded: "复诊资料上传成功",
     document_upload_failed: "复诊资料上传失败",
     document_parse_started: "开始整理资料草稿",

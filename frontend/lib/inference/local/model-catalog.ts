@@ -6,6 +6,7 @@
 import { buildModelCatalogUrl } from "./constants";
 import { buildApiUrl } from "../shared/http";
 import { Platform } from "react-native";
+import { TRACK_C_OFFLINE_DEMO } from "../track-c-demo";
 
 export interface ModelCatalogEntry {
   /** Stable identifier == the filename. */
@@ -32,12 +33,31 @@ export interface ModelCatalogEntry {
   recommended?: boolean;
   /** Server-side download path, e.g. "/api/models/foo.litertlm". */
   download_path: string;
+  /** Metadata endpoint that returns a short-lived direct download URL. */
+  download_info_path?: string;
+  /** Backend delivery strategy. Large files should be gcs-signed-url or remote-direct, not proxy. */
+  delivery?: "gcs-signed-url" | "remote-direct" | "backend-local" | "gcs-proxy" | "remote-proxy";
   modified_at: string;
 }
 
 export interface ModelCatalog {
   models: ModelCatalogEntry[];
   model_dir: string;
+}
+
+export interface ModelDownloadInfo {
+  model_id: string;
+  filename: string;
+  download_url: string;
+  url_host?: string;
+  source?: string;
+  status?: string;
+  status_code?: number;
+  size_bytes?: number;
+  checksum_sha256?: string | null;
+  expires_at?: string | null;
+  requires_auth?: boolean;
+  via_backend_proxy?: boolean;
 }
 
 let cache: ModelCatalog | null = null;
@@ -56,9 +76,12 @@ const ANDROID_FALLBACK_CATALOG: ModelCatalog = {
       size_bytes: 2_588_147_712,
       format: "litertlm",
       platforms: ["android"],
-      runtime: "mediapipe-llm",
+      runtime: "litert-lm",
+      checksum_sha256: "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
       recommended: true,
       download_path: "/api/models/gemma-4-E2B-it.litertlm",
+      download_info_path: "/api/models/gemma-4-E2B-it.litertlm/download-info",
+      delivery: "gcs-signed-url",
       modified_at: "fallback"
     }
   ]
@@ -80,8 +103,11 @@ const IOS_FALLBACK_CATALOG: ModelCatalog = {
       runtime: "litert-lm",
       min_ios: "16.0",
       min_device_memory_gb: 6,
+      checksum_sha256: "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
       recommended: true,
       download_path: "/api/models/gemma-4-E2B-it.litertlm",
+      download_info_path: "/api/models/gemma-4-E2B-it.litertlm/download-info",
+      delivery: "gcs-signed-url",
       modified_at: "fallback"
     }
   ]
@@ -113,6 +139,12 @@ function withPlatformFallback(models: ModelCatalogEntry[]): ModelCatalogEntry[] 
 
 /** Fetch the model catalog from the backend. Cached for ~60 s. */
 export async function fetchModelCatalog(force = false): Promise<ModelCatalog> {
+  if (TRACK_C_OFFLINE_DEMO) {
+    cache = fallbackCatalogForCurrentPlatform();
+    cacheTime = Date.now();
+    return cache;
+  }
+
   if (!force && cache && Date.now() - cacheTime < CACHE_TTL_MS) {
     return cache;
   }
@@ -170,4 +202,55 @@ export function resolveModelDownloadUrl(entry: ModelCatalogEntry): string {
   }
   const path = entry.download_path.startsWith("/") ? entry.download_path : `/${entry.download_path}`;
   return buildApiUrl(path);
+}
+
+function resolveDownloadInfoUrl(entry: ModelCatalogEntry): string {
+  const path = entry.download_info_path ?? `/api/models/${encodeURIComponent(entry.filename || entry.id)}/download-info`;
+  if (/^https?:\/\//i.test(path)) return path;
+  return buildApiUrl(path.startsWith("/") ? path : `/${path}`);
+}
+
+function resolveDirectOrApiUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  return buildApiUrl(url.startsWith("/") ? url : `/${url}`);
+}
+
+export function safeUrlHost(url: string): string {
+  try {
+    return new URL(url).host || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+export async function resolveModelDownloadInfo(entry: ModelCatalogEntry): Promise<ModelDownloadInfo> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(resolveDownloadInfoUrl(entry), { signal: controller.signal });
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = (await response.json()) as { detail?: string };
+        detail = payload.detail ? `：${payload.detail}` : "";
+      } catch {
+        detail = "";
+      }
+      throw new Error(`模型下载准备失败：服务器返回 ${response.status}${detail}`);
+    }
+    const payload = (await response.json()) as ModelDownloadInfo;
+    return {
+      ...payload,
+      download_url: resolveDirectOrApiUrl(payload.download_url),
+      size_bytes: payload.size_bytes ?? entry.size_bytes,
+      checksum_sha256: payload.checksum_sha256 ?? entry.checksum_sha256 ?? null
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("模型下载准备超时，请检查网络后重试。");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

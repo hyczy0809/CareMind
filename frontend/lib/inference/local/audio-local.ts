@@ -1,12 +1,18 @@
-// On-device speech transcription via Gemma multimodal. The recorder in
-// SmartLogScreen produces a local file URI (file://...); we strip the
-// scheme and hand the file path to the native module.
+// Optional on-device speech transcription via Gemma multimodal. This path is
+// disabled by default because the current Track C build does not ship a stable
+// local audio encoder; UI must not label system speech recognition as Gemma
+// audio understanding.
 
 import type { AudioTranscriptionResponse, TranscribeAudioNoteInput } from "../shared/types";
 import { Gemma } from "./gemma-native";
 import { ensureEngine } from "./model-manager";
 import { buildTranscriptionPrompt } from "./prompts";
-import { TRANSCRIPTION_MAX_TOKENS, DEFAULT_TEMPERATURE, DEFAULT_TOP_K } from "./constants";
+import {
+  defaultContextTokensForModel,
+  TRANSCRIPTION_MAX_TOKENS,
+  DEFAULT_TEMPERATURE,
+  DEFAULT_TOP_K
+} from "./constants";
 import { reportOnDeviceInference } from "./telemetry";
 
 const LOCAL_GEMMA_AUDIO_ENABLED = process.env.EXPO_PUBLIC_CAREMIND_ENABLE_LOCAL_AUDIO === "1";
@@ -32,6 +38,7 @@ export async function transcribeAudioNoteLocal(
     }
 
     filename = await ensureEngine();
+    const contextTokens = defaultContextTokensForModel(filename);
 
     const language = input.language ?? "zh";
     const prompt = buildTranscriptionPrompt(language);
@@ -40,6 +47,7 @@ export async function transcribeAudioNoteLocal(
     const result = await Gemma.generateWithAudio(prompt, path, {
       filename,
       maxTokens: TRANSCRIPTION_MAX_TOKENS,
+      contextTokens,
       temperature: DEFAULT_TEMPERATURE,
       topK: DEFAULT_TOP_K
     });

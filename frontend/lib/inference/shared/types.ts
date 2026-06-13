@@ -13,6 +13,7 @@ import type {
   FollowupRange,
   StructuredLogV2
 } from "../../../types/care-workflow";
+import type { InferenceProvenance } from "./provenance";
 
 export type {
   CareMindIntent,
@@ -40,6 +41,7 @@ export interface CareWorkflowAppResult {
     principle: string;
     recordSuggestion?: string;
   } | null;
+  inferenceProvenance?: InferenceProvenance;
 }
 
 export interface FollowupSummaryInput {

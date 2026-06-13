@@ -1,0 +1,17 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.caremind.litertlmbridge'
+    compileSdk rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        minSdk rootProject.ext.minSdkVersion
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+}
+
+dependencies {
+    runtimeOnly 'com.google.ai.edge.litertlm:litertlm-android:0.13.1'
+}

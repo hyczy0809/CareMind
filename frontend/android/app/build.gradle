@@ -2,6 +2,16 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+configurations.matching { it.name.endsWith("CompileClasspath") }.configureEach {
+    resolutionStrategy.force(
+        "org.jetbrains.kotlin:kotlin-stdlib:${rootProject.ext.kotlinVersion}",
+        "org.jetbrains.kotlin:kotlin-stdlib-common:${rootProject.ext.kotlinVersion}",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk7:${rootProject.ext.kotlinVersion}",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:${rootProject.ext.kotlinVersion}",
+        "org.jetbrains.kotlin:kotlin-reflect:${rootProject.ext.kotlinVersion}"
+    )
+}
+
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 /**
@@ -174,11 +184,10 @@ dependencies {
         implementation jscFlavor
     }
 
-    // CareMind: on-device LLM inference (Gemma .litertlm / .task via MediaPipe).
+    // CareMind: on-device LLM inference (Gemma .litertlm via LiteRT-LM).
     // Used only when the user opts into 隐私模式 (privacy mode) in settings.
-    // NOTE: 0.10.35+ is required for Gemma 4 `.litertlm` files — older
-    // versions abort with `Unknown model type: tf_lite_audio_adapter` when
-    // they hit the audio modality block embedded in the bundle.
-    implementation 'com.google.mediapipe:tasks-genai:0.10.35'
+    // Gemma 4 E2B bundles contain LiteRT-LM modules that the older MediaPipe
+    // LlmInference runtime does not understand.
+    implementation project(':caremind-litertlm-bridge')
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }

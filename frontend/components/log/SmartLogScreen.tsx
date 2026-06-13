@@ -10,12 +10,16 @@ import {
   ClipboardList,
   Mic,
   Play,
+  ShieldCheck,
   Volume2,
   X
 } from "lucide-react-native";
 import { useCareMind } from "../../lib/caremind-store";
 import { runCareWorkflow, transcribeAudioNote } from "../../lib/care-workflow-api";
 import { isPrivacyMode } from "../../lib/inference/privacy-mode";
+import { TRACK_C_OFFLINE_DEMO } from "../../lib/inference/track-c-demo";
+import type { InferenceProvenance } from "../../lib/inference/shared/provenance";
+import { sourceLabel } from "../../lib/inference/shared/provenance";
 import { selectionHaptic, successHaptic } from "../../lib/safe-haptics";
 import {
   ANDROID_SPEECH_RECOGNITION_AVAILABLE,
@@ -169,7 +173,7 @@ function formatEventDateTime(iso: string) {
 function MedicalBoundaryBubble({ onClose }: { onClose: () => void }) {
   return (
     <View style={styles.boundaryBubble}>
-      <Text style={styles.boundaryBubbleText}>我不能判断诊断或用药，但可以帮你整理成复诊时医生容易理解的问题。</Text>
+      <Text style={styles.boundaryBubbleText}>请不要自行停药或调整剂量。CareMind 只把它整理成复诊问题，不给用药建议。</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="关闭医疗边界提示" hitSlop={hitSlop} onPress={onClose} style={styles.bubbleClose}>
         <X color={colors.status.info} size={18} />
       </Pressable>
@@ -535,7 +539,7 @@ function MagicLogInput({
     setVoiceHint("正在请求麦克风权限……");
 
     try {
-      if (await isPrivacyMode()) {
+      if ((await isPrivacyMode()) && !TRACK_C_OFFLINE_DEMO) {
         setVoiceState("unsupported");
         setVoiceHint("隐私模式下暂不启用语音转文字。你可以先手动输入，或关闭隐私模式后使用系统语音识别。");
         onTrackVoiceEvent("voice_input_unsupported", {
@@ -563,7 +567,11 @@ function MagicLogInput({
       }
 
       await startAndroidSpeechRecognition("zh-CN");
-      setVoiceHint("正在听，松手后我会转成文字。");
+      setVoiceHint(
+        TRACK_C_OFFLINE_DEMO
+          ? "正在听，松手后会用手机系统语音识别转成文字；之后请点“帮我整理”进入本地 Gemma。"
+          : "正在听，松手后我会转成文字。"
+      );
       onTrackVoiceEvent("voice_input_started", {
         platform: Platform.OS,
         provider: "android_speech_recognizer"
@@ -617,7 +625,7 @@ function MagicLogInput({
     recordingRef.current = null;
     nativeStopRequestedRef.current = false;
     setVoiceState("transcribing");
-    setVoiceHint("正在上传并转成文字……");
+    setVoiceHint("正在转成文字……");
 
     try {
       await recording.stopAndUnloadAsync();
@@ -660,6 +668,15 @@ function MagicLogInput({
 
   function startVoiceInput() {
     if (parseState === "parsing") return;
+    if (TRACK_C_OFFLINE_DEMO && Platform.OS !== "android") {
+      setVoiceState("unsupported");
+      setVoiceHint("Track C 离线 demo 目前只在 Android 使用系统语音转文字；其他平台请先手动输入。");
+      onTrackVoiceEvent("voice_input_unsupported", {
+        platform: Platform.OS,
+        reason: "track_c_audio_requires_android_system_speech"
+      });
+      return;
+    }
     if (Platform.OS === "web") {
       startWebSpeechInput();
       return;
@@ -964,6 +981,43 @@ function MilestoneToast({ text }: { text: string }) {
   );
 }
 
+function provenanceTone(source: InferenceProvenance["source"]): "brand" | "watch" | "info" {
+  if (source === "native_litertlm_success") return "brand";
+  if (source === "native_litertlm_parse_fallback") return "watch";
+  return "info";
+}
+
+function InferenceProvenanceCard({ provenance }: { provenance: InferenceProvenance }) {
+  const detail = [
+    `source=${provenance.source}`,
+    `model=${provenance.modelId}`,
+    `backend=${provenance.backend}`,
+    `latency=${Math.max(0, Math.round(provenance.latencyMs))}ms`,
+    `native=${provenance.nativeGenerateAttempted ? "attempted" : "not_attempted"}`,
+    `returned=${provenance.nativeGenerateReturned ? "yes" : "no"}`,
+    `parse=${provenance.parseSucceeded ? "ok" : "fallback"}`,
+    provenance.rawOutputHash ? `hash=${provenance.rawOutputHash}` : null
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <Card tone={provenanceTone(provenance.source)}>
+      <View style={styles.headerRow}>
+        <ShieldCheck color={colors.brand.primaryDark} size={20} />
+        <Text style={styles.cardTitle}>{sourceLabel(provenance.source)}</Text>
+      </View>
+      {provenance.source === "unavailable" || provenance.source === "rule_local_fallback" ? (
+        <Text style={styles.provenanceMeta}>
+          本地模型未就绪或没有返回 native 输出。当前内容只是本地规则/手动草稿兜底，不代表 Gemma 4 / LiteRT-LM 真实推理；请先下载或导入模型，并运行离线验证。
+        </Text>
+      ) : null}
+      <Text style={styles.provenanceMeta}>{detail}</Text>
+      {provenance.fallbackReason ? (
+        <Text style={styles.provenanceMeta}>fallback_reason={provenance.fallbackReason}</Text>
+      ) : null}
+    </Card>
+  );
+}
+
 export function SmartLogScreen() {
   const {
     patient,
@@ -981,6 +1035,7 @@ export function SmartLogScreen() {
   const [workflowAttentionItems, setWorkflowAttentionItems] = useState<AttentionItem[]>([]);
   const [workflowMemoryItems, setWorkflowMemoryItems] = useState<MemoryItem[]>([]);
   const [workflowScriptAdvice, setWorkflowScriptAdvice] = useState<ScriptAdvice | null>(null);
+  const [inferenceProvenance, setInferenceProvenance] = useState<InferenceProvenance | null>(null);
   const [candidate, setCandidate] = useState<MemoryItem | null>(null);
   const [completedSteps, setCompletedSteps] = useState(0);
   const [inputError, setInputError] = useState<string | null>(null);
@@ -1025,23 +1080,40 @@ export function SmartLogScreen() {
       setWorkflowAttentionItems(result.attentionItems);
       setWorkflowMemoryItems(result.memoryItems);
       setWorkflowScriptAdvice(result.scriptAdvice);
+      setInferenceProvenance(result.inferenceProvenance ?? null);
       setCandidate(result.memoryItems[0] ?? previewMemoryCandidate(value));
       trackEvent("care_log_ai_parse_succeeded", {
         platform: Platform.OS,
         attention_count: result.attentionItems.length,
-        memory_candidate_count: result.memoryItems.length
+        memory_candidate_count: result.memoryItems.length,
+        inference_source: result.inferenceProvenance?.source ?? "unknown"
       });
     } catch (error) {
       console.warn("CareMind workflow parse failed, using local preview", error);
       const fallbackMemory = previewMemoryCandidate(value);
+      const reason = error instanceof Error ? error.message : "unknown";
       setParsedLog(previewStructuredLog(value));
       setWorkflowAttentionItems([]);
       setWorkflowMemoryItems(fallbackMemory ? [fallbackMemory] : []);
       setWorkflowScriptAdvice(null);
+      setInferenceProvenance({
+        source: "manual_draft",
+        task: "daily_log",
+        modelId: "none",
+        backend: "none",
+        latencyMs: 0,
+        engineInitialized: false,
+        nativeGenerateAttempted: false,
+        nativeGenerateReturned: false,
+        rawOutputLength: 0,
+        rawOutputHash: null,
+        parseSucceeded: false,
+        fallbackReason: reason
+      });
       setCandidate(fallbackMemory);
       trackEvent("care_log_ai_parse_failed", {
         platform: Platform.OS,
-        reason: error instanceof Error ? error.message : "unknown"
+        reason
       });
     }
     setParseState("parsed");
@@ -1065,6 +1137,7 @@ export function SmartLogScreen() {
     setWorkflowAttentionItems([]);
     setWorkflowMemoryItems([]);
     setWorkflowScriptAdvice(null);
+    setInferenceProvenance(null);
     setCandidate(null);
     setCompletedSteps(0);
     setInputError(null);
@@ -1101,6 +1174,7 @@ export function SmartLogScreen() {
         <>
           {memoryItems.length > 0 ? <MemoryUsedPill label="已参考已记住的信息" /> : null}
           <View style={styles.spacer} />
+          {inferenceProvenance ? <InferenceProvenanceCard provenance={inferenceProvenance} /> : null}
           <StructuredSummaryCard structuredLog={parsedLog} onChange={setParsedLog} />
           {scriptAdvice ? <InstantScriptCard advice={scriptAdvice} /> : null}
           {parseState === "saved" ? <AttentionPreviewCard /> : null}
@@ -1409,6 +1483,11 @@ const styles = StyleSheet.create({
     ...typography.small,
     color: colors.text.muted,
     marginTop: 10
+  },
+  provenanceMeta: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginTop: 8
   },
   badScript: {
     borderRadius: 14,

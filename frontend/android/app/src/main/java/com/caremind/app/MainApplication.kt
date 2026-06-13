@@ -26,7 +26,7 @@ class MainApplication : Application(), ReactApplication {
         object : DefaultReactNativeHost(this) {
           override fun getPackages(): List<ReactPackage> {
             val packages = PackageList(this).packages
-            // CareMind on-device LLM bridge (Gemma 3 via MediaPipe LLM Inference API).
+            // CareMind on-device LLM bridge (Gemma 4 via LiteRT-LM).
             packages.add(CaremindGemmaPackage())
             packages.add(CaremindSpeechPackage())
             return packages

@@ -30,6 +30,34 @@ export type ModelProfileV2 =
   | "android_aicore_optional"
   | "deterministic_fallback";
 
+export type InferenceProvenanceSourceV2 =
+  | "native_litertlm_success"
+  | "native_litertlm_parse_fallback"
+  | "rule_local_fallback"
+  | "local_fallback"
+  | "deterministic_local_fallback"
+  | "cloud_26b"
+  | "cloud_31b"
+  | "stub_debug"
+  | "demo_mock"
+  | "manual_draft"
+  | "unavailable";
+
+export interface InferenceProvenanceV2 {
+  source: InferenceProvenanceSourceV2;
+  task: "daily_log" | "communication" | "follow_up_summary" | "followup_document" | "guardrail" | "audio";
+  modelId: string;
+  backend: string;
+  latencyMs: number;
+  engineInitialized: boolean;
+  nativeGenerateAttempted: boolean;
+  nativeGenerateReturned: boolean;
+  rawOutputLength: number;
+  rawOutputHash: string | null;
+  parseSucceeded: boolean;
+  fallbackReason: string | null;
+}
+
 export type DocumentParseQuality = "readable" | "partially_readable" | "unreadable" | "unsupported";
 
 export interface CareWorkflowRequest {
@@ -273,6 +301,7 @@ export interface CareWorkflowResponse {
   memory_candidates: MemoryCandidateV2[];
   followup_patch: FollowupPatchV2 | null;
   analytics_context: CareWorkflowAnalyticsContext;
+  inference_provenance?: InferenceProvenanceV2;
   error?: CareWorkflowError;
 }
 
@@ -302,5 +331,6 @@ export interface FollowupSummaryResponse {
   safety_flags: string[];
   model_profile: ModelProfileV2;
   input_bundle_overview: Record<string, unknown>;
+  inference_provenance?: InferenceProvenanceV2;
   error?: CareWorkflowError | null;
 }

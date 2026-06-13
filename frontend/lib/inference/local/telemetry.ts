@@ -10,6 +10,8 @@
 // The endpoint on the backend additionally rejects oversized strings.
 
 import { buildApiUrl } from "../shared/http";
+import type { InferenceProvenanceSource } from "../shared/provenance";
+import { TRACK_C_OFFLINE_DEMO } from "../track-c-demo";
 
 const TELEMETRY_TIMEOUT_MS = 4_000;
 
@@ -28,10 +30,20 @@ export interface OnDeviceTelemetry {
   fellBack?: boolean;
   /** Short error tag, e.g. "json_parse_failed". Truncated to 64 chars. */
   errorKind?: string;
+  source?: InferenceProvenanceSource;
+  backend?: string;
+  rawOutputHash?: string | null;
 }
 
 /** Best-effort ping. Never throws — errors are swallowed and logged only. */
 export async function reportOnDeviceInference(t: OnDeviceTelemetry): Promise<void> {
+  if (TRACK_C_OFFLINE_DEMO) {
+    console.log(
+      `[telemetry] Track C offline: task=${t.task} source=${t.source ?? "unknown"} model=${t.modelId} elapsedMs=${t.elapsedMs} rawHash=${t.rawOutputHash ?? "none"}`
+    );
+    return;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TELEMETRY_TIMEOUT_MS);
 
@@ -43,7 +55,10 @@ export async function reportOnDeviceInference(t: OnDeviceTelemetry): Promise<voi
     input_chars: Math.max(0, Math.floor(t.inputChars ?? 0)),
     output_chars: Math.max(0, Math.floor(t.outputChars ?? 0)),
     fell_back: !!t.fellBack,
-    error_kind: t.errorKind ? t.errorKind.slice(0, 64) : null
+    error_kind: t.errorKind ? t.errorKind.slice(0, 64) : null,
+    source: t.source ?? null,
+    backend: t.backend ? t.backend.slice(0, 64) : null,
+    raw_output_hash: t.rawOutputHash ? t.rawOutputHash.slice(0, 64) : null
   };
 
   try {

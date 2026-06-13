@@ -8,7 +8,9 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -22,9 +24,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Writes to `<name>.part` and atomically renames on completion, so partial
  * downloads never look "ready". Cancellation is cooperative per filename.
  *
- * Both `.litertlm` (LiteRT-LM) and `.task` (MediaPipe Task Bundle) formats
- * are supported by `com.google.mediapipe:tasks-genai` — `setModelPath()`
- * inspects file contents, not the extension.
+ * CareMind's Android privacy mode now runs Gemma 4 through LiteRT-LM, so only
+ * `.litertlm` model bundles are accepted by the native runtime.
  */
 class GemmaModelDownloader(private val context: Context) {
     private val tag = "CaremindGemmaModel"
@@ -52,9 +53,14 @@ class GemmaModelDownloader(private val context: Context) {
         return dir
     }
 
+    fun appPrivateTargetFile(filename: String): File {
+        require(isSafeFilename(filename)) { "非法的模型文件名：$filename" }
+        return File(modelDir(), filename)
+    }
+
     fun targetFile(filename: String): File {
         require(isSafeFilename(filename)) { "非法的模型文件名：$filename" }
-        val appPrivateFile = File(modelDir(), filename)
+        val appPrivateFile = appPrivateTargetFile(filename)
         val devFile = debugTmpModelFile()
         if (shouldUseDebugTmpModel(filename, devFile)) {
             Log.i(tag, "Using debug tmp model path=${devFile.absolutePath} for filename=$filename")
@@ -91,17 +97,45 @@ class GemmaModelDownloader(private val context: Context) {
     private fun isDebuggable(): Boolean =
         (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
-    private fun debugTmpModelFile(): File =
+    fun debugTmpModelFile(): File =
         File("/data/local/tmp/llm/gemma.litertlm")
 
-    private fun isDebugTmpModel(file: File): Boolean =
+    fun isDebugTmpModel(file: File): Boolean =
         file.absolutePath == debugTmpModelFile().absolutePath
+
+    @Throws(IOException::class)
+    fun copyDebugModelIntoAppPrivate(filename: String): File {
+        val source = debugTmpModelFile()
+        if (!source.exists() || source.length() <= 0L) {
+            throw IOException("未找到调试模型：${source.absolutePath}")
+        }
+        if (source.extension.lowercase(Locale.US) != "litertlm") {
+            throw IOException("调试模型格式不支持：.${source.extension}")
+        }
+        val target = appPrivateTargetFile(filename)
+        target.parentFile?.let { parent ->
+            if (!parent.exists()) parent.mkdirs()
+        }
+        source.inputStream().use { input ->
+            FileOutputStream(target, false).use { output ->
+                val buffer = ByteArray(1024 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                }
+                output.flush()
+            }
+        }
+        return target
+    }
 
     @Throws(IOException::class)
     fun download(
         filename: String,
         url: String,
         checksumSha256: String?,
+        expectedBytes: Long?,
         progressListener: (bytesDownloaded: Long, totalBytes: Long) -> Unit
     ): File {
         resetCancel(filename)
@@ -125,20 +159,39 @@ class GemmaModelDownloader(private val context: Context) {
                 }
             }
 
-            val responseCode = connection.responseCode
+            val responseCode = try {
+                connection.responseCode
+            } catch (t: SocketTimeoutException) {
+                connection.disconnect()
+                throw IOException("模型下载超时：网络连接或服务器响应太慢，请保持网络稳定后重试。", t)
+            } catch (t: UnknownHostException) {
+                connection.disconnect()
+                throw IOException("模型下载失败：无法连接到下载服务器，请检查网络或 DNS。", t)
+            }
+            val contentLength = connection.contentLengthLong.coerceAtLeast(0L)
+            Log.i(
+                tag,
+                "download attempt model=$filename host=${urlHost(connection.url)} status=$responseCode contentLength=$contentLength retry=${attempt - 1}"
+            )
             if (existingBytes > 0 && responseCode == HttpURLConnection.HTTP_OK) {
                 // Server ignored Range; restart cleanly to avoid corrupt output.
                 part.delete()
             }
             if (responseCode !in 200..299) {
+                val message = httpErrorMessage(responseCode)
                 connection.disconnect()
-                throw IOException("模型下载失败：HTTP $responseCode")
+                if (responseCode >= 500 && attempt < maxAttempts) {
+                    lastError = IOException(message)
+                    Thread.sleep((attempt * 1500L).coerceAtMost(6000L))
+                    continue
+                }
+                throw IOException(message)
             }
 
             val resumed = existingBytes > 0 && responseCode == HttpURLConnection.HTTP_PARTIAL
             val downloadedOffset = if (resumed) existingBytes else 0L
-            val contentLength = connection.contentLengthLong.coerceAtLeast(0L)
             val totalBytes = when {
+                expectedBytes != null && expectedBytes > 0L -> expectedBytes
                 resumed && contentLength > 0 -> downloadedOffset + contentLength
                 contentLength > 0 -> contentLength
                 expectedTotalBytes > 0 -> expectedTotalBytes
@@ -178,8 +231,9 @@ class GemmaModelDownloader(private val context: Context) {
                 // Final progress tick.
                 progressListener(downloaded, if (totalBytes > 0) totalBytes else downloaded)
 
-                if (expectedTotalBytes > 0 && downloaded < expectedTotalBytes) {
-                    throw IOException("模型下载未完成：$downloaded / $expectedTotalBytes")
+                val finalExpectedBytes = expectedBytes?.takeIf { it > 0L } ?: expectedTotalBytes
+                if (finalExpectedBytes > 0 && downloaded != finalExpectedBytes) {
+                    throw IOException("模型下载大小不完整：$downloaded / $finalExpectedBytes，请重新点击下载继续。")
                 }
 
                 if (target.exists()) target.delete()
@@ -204,6 +258,22 @@ class GemmaModelDownloader(private val context: Context) {
 
         throw lastError ?: IOException("模型下载失败")
     }
+
+    private fun httpErrorMessage(statusCode: Int): String =
+        when (statusCode) {
+            401, 403 -> "模型下载失败：HTTP $statusCode，模型源鉴权或许可未通过。"
+            404 -> "模型下载失败：HTTP 404，模型文件不存在。"
+            408, 504 -> "模型下载超时：HTTP $statusCode，请保持网络连接后重试。"
+            in 500..599 -> "模型下载失败：服务器返回 HTTP $statusCode。"
+            else -> "模型下载失败：HTTP $statusCode。"
+        }
+
+    private fun urlHost(url: URL?): String =
+        try {
+            url?.host ?: "unknown"
+        } catch (_: Throwable) {
+            "unknown"
+        }
 
     private fun assertEnoughDiskSpace(directory: File, bytesRemaining: Long) {
         if (!directory.exists()) directory.mkdirs()
@@ -230,7 +300,7 @@ class GemmaModelDownloader(private val context: Context) {
         Log.i(tag, "Checksum OK sha256=$actual file=${file.name}")
     }
 
-    private fun sha256(file: File): String {
+    fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(1024 * 1024)

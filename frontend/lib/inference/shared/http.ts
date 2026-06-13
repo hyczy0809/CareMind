@@ -1,23 +1,33 @@
 // Shared HTTP/config plumbing for the cloud inference adapters. Kept here so
 // each per-task cloud file stays focussed on its own mapping logic.
 
+import { TRACK_C_OFFLINE_DEMO } from "../track-c-demo";
+
 const DEV_API_BASE_URL =
   process.env.EXPO_PUBLIC_CAREMIND_DEV_API_URL ?? "http://127.0.0.1:8090";
+const PRODUCTION_API_BASE_URL = "https://caremind-1039168666325.us-west1.run.app";
 const CONFIGURED_API_BASE_URL = process.env.EXPO_PUBLIC_CAREMIND_API_URL?.trim();
 const IS_DEV_BUILD =
   typeof __DEV__ !== "undefined" ? __DEV__ : process.env.NODE_ENV !== "production";
 
 export const API_BASE_URL = normalizeApiBaseUrl(
-  CONFIGURED_API_BASE_URL || (IS_DEV_BUILD ? DEV_API_BASE_URL : "")
+  CONFIGURED_API_BASE_URL || (IS_DEV_BUILD ? DEV_API_BASE_URL : PRODUCTION_API_BASE_URL)
 );
 
 export const API_BASE_SOURCE = CONFIGURED_API_BASE_URL
   ? "env"
   : IS_DEV_BUILD
     ? "dev-default"
-    : "missing-production-env";
+    : "production-default";
 
 export const REQUEST_TIMEOUT_MS = 12000;
+const TRACK_C_BLOCKED_PREFIXES = [
+  "/api/audio",
+  "/api/care-workflow",
+  "/api/documents",
+  "/api/guardrail",
+  "/api/reports"
+];
 
 export function requireApiBaseUrl(): string {
   if (!API_BASE_URL) {
@@ -31,7 +41,16 @@ export function requireApiBaseUrl(): string {
 export function buildApiUrl(path: string): string {
   const base = requireApiBaseUrl();
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  assertTrackCCloudEndpointAllowed(normalizedPath);
   return `${base}${normalizedPath}`;
+}
+
+export function assertTrackCCloudEndpointAllowed(path: string): void {
+  if (!TRACK_C_OFFLINE_DEMO) return;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (TRACK_C_BLOCKED_PREFIXES.some((prefix) => normalizedPath.startsWith(prefix))) {
+    throw new Error(`Track C 离线 demo 禁止调用云端接口：${normalizedPath}`);
+  }
 }
 
 export async function readableApiError(response: Response, fallback: string): Promise<string> {

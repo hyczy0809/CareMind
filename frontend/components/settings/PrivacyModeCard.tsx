@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { Check, Cpu, Download, ShieldCheck, Trash2, X } from "lucide-react-native";
 import { Button } from "../ui/Button";
 import { colors, hitSlop, radius, typography } from "../../lib/theme";
@@ -9,7 +10,10 @@ import {
   deleteModel,
   downloadModel,
   ensureSelectionFromCatalog,
+  importDebugModel,
+  preloadSelectedEngine,
   refreshCatalogNow,
+  runLocalGemmaSmokeTest,
   setStubMode,
   subscribeManager,
   type ManagerState,
@@ -17,6 +21,11 @@ import {
   type PerModelState
 } from "../../lib/inference/local/model-manager";
 import { GEMMA_NATIVE_AVAILABLE } from "../../lib/inference/local/gemma-native";
+import { TRACK_C_OFFLINE_DEMO, trackCLabel } from "../../lib/inference/track-c-demo";
+import {
+  runTrackCOfflineVerification,
+  type OfflineVerificationReport
+} from "../../lib/inference/offline-verification";
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes < 0) return "0 MB";
@@ -58,17 +67,40 @@ function statusLabel(per: PerModelState | undefined): { text: string; tone: "inf
       return { text: "已就绪", tone: "ready" };
     case "downloading":
       return { text: "下载中", tone: "info" };
-    case "checking":
-      return { text: "检查中…", tone: "info" };
-    case "absent":
+    case "not_downloaded":
       return { text: "未下载", tone: "warn" };
-    case "error":
-      return { text: "出错", tone: "error" };
+    case "download_failed":
+      return { text: "下载失败", tone: "error" };
+    case "downloaded":
+      return { text: "已下载，待验证", tone: "warn" };
+    case "validating":
+      return { text: "校验中…", tone: "info" };
+    case "validation_failed":
+      return { text: "校验失败", tone: "error" };
+    case "initializing":
+      return { text: "初始化中…", tone: "info" };
+    case "runtime_failed":
+      return { text: "运行失败", tone: "error" };
     case "unsupported":
       return { text: "平台不支持", tone: "warn" };
     default:
       return { text: "未知", tone: "warn" };
   }
+}
+
+function metricRows(report: OfflineVerificationReport): Array<[string, string]> {
+  const p = report.performance;
+  return [
+    ["Device", p.device],
+    ["Runtime", p.runtime],
+    ["Model", p.model],
+    ["Backend", p.backend],
+    ["Model size", p.modelSize],
+    ["Smart log", p.smartLogLatencyMs ? `${p.smartLogLatencyMs} ms` : "not measured"],
+    ["Simple script", p.communicationLatencyMs ? `${p.communicationLatencyMs} ms` : "not measured"],
+    ["Throughput", p.outputCharsPerSec ? `${p.outputCharsPerSec} chars/s` : "not measured"],
+    ["Stub/cloud check", report.forbiddenSourceCheck]
+  ];
 }
 
 export function PrivacyModeCard() {
@@ -78,13 +110,19 @@ export function PrivacyModeCard() {
   const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [diagnosticRunning, setDiagnosticRunning] = useState(false);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [diagnosticReport, setDiagnosticReport] = useState<OfflineVerificationReport | null>(null);
+  const [modelActionId, setModelActionId] = useState<string | null>(null);
   const localInferenceAvailable = GEMMA_NATIVE_AVAILABLE;
-  const visiblePrivacyOn = localInferenceAvailable ? privacyOn : false;
+  const visiblePrivacyOn = localInferenceAvailable ? TRACK_C_OFFLINE_DEMO || privacyOn : false;
   const unsupportedPlatformLabel = Platform.OS === "ios" ? "iPhone" : Platform.OS === "web" ? "Web" : "当前平台";
   const localSubtitle =
-    Platform.OS === "ios"
-      ? "开启后优先使用 iPhone 本地 GGUF 模型处理文字照护记录；语音暂不走本地模型。"
-      : "开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。";
+    TRACK_C_OFFLINE_DEMO
+      ? "Track C 离线演示已开启：评审路径只使用本机 Gemma 4 E2B/E4B 与本地规则，不调用云端推理。"
+      : Platform.OS === "ios"
+        ? "开启后优先使用 iPhone 本地 GGUF 模型处理文字照护记录；语音暂不走本地模型。"
+        : "开启后优先使用已下载的本地文字模型处理照护记录；语音暂不走本地模型。";
 
   useEffect(() => subscribeManager(setManager), []);
 
@@ -106,9 +144,50 @@ export function PrivacyModeCard() {
     void reloadCatalog();
   }, [reloadCatalog]);
 
+  useEffect(() => {
+    if (!visiblePrivacyOn || !selectedId || manager.byModel[selectedId]?.status !== "ready") return;
+    void preloadSelectedEngine({ maxTokens: 768 });
+  }, [manager.byModel, selectedId, visiblePrivacyOn]);
+
+  async function runOfflineDiagnostic() {
+    setDiagnosticRunning(true);
+    setDiagnosticError(null);
+    try {
+      const report = await runTrackCOfflineVerification();
+      setDiagnosticReport(report);
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDiagnosticRunning(false);
+    }
+  }
+
+  async function copyDiagnosticReport() {
+    if (!diagnosticReport) return;
+    await Clipboard.setStringAsync(diagnosticReport.text);
+  }
+
+  async function runSmokeForModel(modelId: string) {
+    setModelActionId(modelId);
+    try {
+      await runLocalGemmaSmokeTest(modelId);
+    } finally {
+      setModelActionId(null);
+    }
+  }
+
+  async function importDebugModelFor(modelId: string) {
+    setModelActionId(modelId);
+    try {
+      await importDebugModel(modelId);
+    } finally {
+      setModelActionId(null);
+    }
+  }
+
   const showBanner =
     localInferenceAvailable &&
-    privacyOn &&
+    visiblePrivacyOn &&
     selectedId !== null &&
     (manager.byModel[selectedId]?.status !== "ready") &&
     manager.byModel[selectedId]?.status !== "unsupported";
@@ -129,9 +208,9 @@ export function PrivacyModeCard() {
         </View>
         <Switch
           value={visiblePrivacyOn}
-          disabled={!localInferenceAvailable}
+          disabled={!localInferenceAvailable || TRACK_C_OFFLINE_DEMO}
           onValueChange={(value) => {
-            if (!localInferenceAvailable) return;
+            if (!localInferenceAvailable || TRACK_C_OFFLINE_DEMO) return;
             void setPrivacy(value);
           }}
           trackColor={{ false: colors.border.subtle, true: colors.brand.primary }}
@@ -142,8 +221,15 @@ export function PrivacyModeCard() {
       {showBanner ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>
-            当前选中的模型尚未就绪。隐私模式下文字请求不会自动上传云端；请先下载并选择本地模型，或关闭隐私模式后使用云端整理。
+            当前选中的模型尚未就绪。Track C / 隐私路径不会自动上传云端；请先下载并选择本地模型，或使用手动草稿。
           </Text>
+        </View>
+      ) : null}
+
+      {TRACK_C_OFFLINE_DEMO ? (
+        <View style={styles.trackCBanner}>
+          <Text style={styles.trackCTitle}>{trackCLabel()}</Text>
+          <Text style={styles.trackCText}>智能记录、简单话术、危机检测、短复诊摘要均走本机模型或本地规则。资料文件只本地保存，不上传解析。</Text>
         </View>
       ) : null}
 
@@ -209,8 +295,16 @@ export function PrivacyModeCard() {
                     {entry.description || `${formatBytes(entry.size_bytes)} · ${entry.format}`}
                   </Text>
                   <View style={styles.modelMetaRow}>
-                    <Text style={styles.modelSize}>{formatBytes(entry.size_bytes)}</Text>
+                    <Text style={styles.modelSize}>{formatBytes(per?.fileSize || entry.size_bytes)}</Text>
                     <Text style={[styles.modelStatus, toneStyle(status.tone)]}>{status.text}</Text>
+                  </View>
+                  <View style={styles.modelDetailBox}>
+                    <Text style={styles.modelDetailText}>validation={per?.validationStatus ?? "not_run"}{per?.validationMessage ? ` · ${per.validationMessage}` : ""}</Text>
+                    <Text style={styles.modelDetailText}>runtime={per?.runtimeStatus ?? "not_run"}{per?.runtimeBackend ? ` · backend=${per.runtimeBackend}` : ""}</Text>
+                    <Text style={styles.modelDetailText}>
+                      smoke={per?.smokeTest?.passed ? "passed" : per?.smokeTest ? "failed" : "not_run"}
+                      {per?.smokeTest?.rawOutputHash ? ` · hash=${per.smokeTest.rawOutputHash}` : ""}
+                    </Text>
                   </View>
                   {per?.status === "downloading" ? (
                     <View style={styles.progressBar}>
@@ -244,13 +338,29 @@ export function PrivacyModeCard() {
                         <Text style={styles.deleteText}>删除</Text>
                       </Pressable>
                     ) : (
-                      <Button
-                        label={per?.status === "error" ? "重新下载" : "下载"}
-                        variant="primary"
-                        icon={<Download color="#FFFFFF" size={16} />}
-                        onPress={() => void downloadModel(entry.id)}
-                      />
+                      <>
+                        <Button
+                          label={per?.status === "download_failed" ? "重新下载" : "下载"}
+                          variant="primary"
+                          icon={<Download color="#FFFFFF" size={16} />}
+                          onPress={() => void downloadModel(entry.id)}
+                        />
+                        {Platform.OS === "android" ? (
+                          <Button
+                            label="导入调试模型"
+                            variant="ghost"
+                            onPress={() => void importDebugModelFor(entry.id)}
+                          />
+                        ) : null}
+                      </>
                     )}
+                    {per?.status === "downloaded" || per?.status === "runtime_failed" || per?.status === "validation_failed" || per?.status === "ready" ? (
+                      <Button
+                        label={modelActionId === entry.id ? "测试中…" : "运行本地 Gemma smoke test"}
+                        variant="secondary"
+                        onPress={() => void runSmokeForModel(entry.id)}
+                      />
+                    ) : null}
                   </View>
                 </View>
               </Pressable>
@@ -270,6 +380,41 @@ export function PrivacyModeCard() {
                 {manager.stub ? "桩模式已开启（点此关闭）" : "启用本地桩模式（开发用，无需真实模型）"}
               </Text>
             </Pressable>
+          ) : null}
+
+          {TRACK_C_OFFLINE_DEMO ? (
+            <View style={styles.diagnosticBox}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>离线验证</Text>
+                <Text style={styles.helper}>建议开启飞行模式后运行</Text>
+              </View>
+              <Text style={styles.helper}>如果显示 rule_local_fallback，说明只是本地规则兜底，不代表 Gemma 4 / LiteRT-LM 真实推理。</Text>
+              <Button
+                label={diagnosticRunning ? "验证中…" : "运行 Track C 离线验证"}
+                variant="secondary"
+                onPress={() => void runOfflineDiagnostic()}
+              />
+              {diagnosticError ? <Text style={styles.errorText}>{diagnosticError}</Text> : null}
+              {diagnosticReport ? (
+                <View style={styles.diagnosticReport}>
+                  <Text style={[styles.diagnosticStatus, diagnosticReport.passed ? styles.diagnosticPass : styles.diagnosticFail]}>
+                    {diagnosticReport.passed ? "离线验证通过" : "离线验证存在失败项"}
+                  </Text>
+                  <View style={styles.metricGrid}>
+                    {metricRows(diagnosticReport).map(([label, value]) => (
+                      <View key={label} style={styles.metricRow}>
+                        <Text style={styles.metricLabel}>{label}</Text>
+                        <Text style={styles.metricValue}>{value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <ScrollView style={styles.diagnosticTextBox} nestedScrollEnabled>
+                    <Text selectable style={styles.diagnosticText}>{diagnosticReport.text}</Text>
+                  </ScrollView>
+                  <Button label="复制诊断报告" variant="ghost" onPress={() => void copyDiagnosticReport()} />
+                </View>
+              ) : null}
+            </View>
           ) : null}
         </>
       )}
@@ -335,6 +480,23 @@ const styles = StyleSheet.create({
   bannerText: {
     ...typography.helper,
     color: "#7A5A00"
+  },
+  trackCBanner: {
+    backgroundColor: colors.brand.primarySoft,
+    borderRadius: radius.md,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: colors.brand.primary
+  },
+  trackCTitle: {
+    ...typography.label,
+    color: colors.brand.primary,
+    fontWeight: "800"
+  },
+  trackCText: {
+    ...typography.small,
+    color: colors.text.secondary,
+    marginTop: 4
   },
   helper: {
     ...typography.small,
@@ -432,6 +594,14 @@ const styles = StyleSheet.create({
     ...typography.small,
     fontWeight: "700"
   },
+  modelDetailBox: {
+    gap: 2,
+    paddingVertical: 6
+  },
+  modelDetailText: {
+    ...typography.helper,
+    color: colors.text.muted
+  },
   errorText: {
     ...typography.small,
     color: colors.status.alert
@@ -448,6 +618,7 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
     marginTop: 4
   },
@@ -478,8 +649,68 @@ const styles = StyleSheet.create({
   devText: {
     ...typography.small,
     color: colors.text.secondary
+  },
+  diagnosticBox: {
+    gap: 10,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.surface.muted,
+    padding: 12
+  },
+  diagnosticReport: {
+    gap: 8
+  },
+  diagnosticStatus: {
+    ...typography.label,
+    fontWeight: "800"
+  },
+  metricGrid: {
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface.card
+  },
+  metricRow: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle
+  },
+  metricLabel: {
+    ...typography.small,
+    flex: 0.85,
+    color: colors.text.muted
+  },
+  metricValue: {
+    ...typography.small,
+    flex: 1.15,
+    color: colors.text.primary,
+    fontWeight: "700",
+    textAlign: "right"
+  },
+  diagnosticPass: {
+    color: colors.status.calm
+  },
+  diagnosticFail: {
+    color: colors.status.alert
+  },
+  diagnosticTextBox: {
+    maxHeight: 170,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface.card,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: 9
+  },
+  diagnosticText: {
+    ...typography.small,
+    color: colors.text.secondary
   }
 });
-
-// Unused import kept for lint hygiene (ScrollView may be added later for very long catalogs).
-void ScrollView;

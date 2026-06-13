@@ -1,3 +1,5 @@
+import type { InferenceProvenanceV2 } from "./care-workflow";
+
 export type MemoryType =
   | "behavior_pattern"
   | "effective_strategy"
@@ -51,6 +53,16 @@ export type FollowupDocumentParseQuality =
   | "unreadable"
   | "unsupported";
 
+export type FollowupDocumentInputModality =
+  | "pdf"
+  | "image"
+  | "docx"
+  | "manual";
+
+export type FollowupDocumentProcessingCapability =
+  | "local_metadata_manual_summary"
+  | "cloud_parse_with_consent";
+
 export type AnalyticsEventName =
   | "demo_data_loaded"
   | "onboarding_completed"
@@ -73,6 +85,7 @@ export type AnalyticsEventName =
   | "followup_copy_succeeded"
   | "followup_copy_failed"
   | "document_upload_started"
+  | "document_local_saved"
   | "document_upload_succeeded"
   | "document_upload_failed"
   | "document_parse_started"
@@ -204,6 +217,7 @@ export interface FollowupDocumentParseResult {
   requires_family_confirmation: boolean;
   parsed_at: string;
   parse_error: string | null;
+  inference_provenance?: InferenceProvenanceV2;
 }
 
 export interface FollowupDocumentRecord {
@@ -211,13 +225,20 @@ export interface FollowupDocumentRecord {
   patientId: string;
   type: FollowupDocumentType;
   title: string;
+  localUri?: string;
+  sha256?: string;
   filename?: string;
   mimeType?: string;
   size?: number;
   summary: string;
+  manualSummary?: string;
   status: FollowupDocumentStatus;
+  inputModality?: FollowupDocumentInputModality;
+  parseQuality?: FollowupDocumentParseQuality;
+  processingCapability?: FollowupDocumentProcessingCapability;
   documentId?: string;
   parseResult?: FollowupDocumentParseResult;
+  inferenceProvenance?: InferenceProvenanceV2;
   confirmedItems?: string[];
   reviewedAt?: string;
   error?: string;

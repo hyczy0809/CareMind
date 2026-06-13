@@ -18,6 +18,8 @@ import { parseFollowupXml } from "./xml-parsers";
 import { isXmlOutput, LOCAL_OUTPUT_FORMAT } from "./format-config";
 import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, DEFAULT_TOP_K } from "./constants";
 import { reportOnDeviceInference } from "./telemetry";
+import type { InferenceProvenance } from "../shared/provenance";
+import { hashInferenceOutput } from "../shared/provenance";
 
 function computeReadiness(recordCount: number): FollowupReadinessV2 {
   let level: FollowupReadinessLevel = "empty";
@@ -44,12 +46,18 @@ function buildFallback(input: FollowupSummaryInput): {
   const nightCount = input.attentionItems.filter((item) => item.type === "night_safety").length;
   const medicationCount = input.attentionItems.filter((item) => item.type === "medication").length;
   const remembered = input.memoryItems.filter((item) => item.status === "confirmed").length;
+  const confirmedDocuments = (input.followupDocuments ?? []).filter((doc) => doc.status === "reviewed");
+  const documentSummaries = confirmedDocuments
+    .map((doc) => doc.summary?.trim() || doc.confirmedItems?.[0]?.trim() || "")
+    .filter(Boolean)
+    .slice(0, 3);
 
   const summaryBullets: string[] = [];
   if (input.recordCount > 0) summaryBullets.push(`近期已保存 ${input.recordCount} 条照护记录。`);
   if (high > 0) summaryBullets.push(`其中 ${high} 条为高优先级关注事项。`);
   if (nightCount > 0) summaryBullets.push("出现夜间起床或安全相关线索。");
   if (medicationCount > 0) summaryBullets.push("出现服药、拒药或漏药相关记录。");
+  if (documentSummaries.length > 0) summaryBullets.push(`已确认复诊资料：${documentSummaries.join("；")}。`);
   if (summaryBullets.length === 0) summaryBullets.push("近期记录平稳，未发现明显异常。");
 
   const doctorQuestions: string[] = [];
@@ -70,7 +78,7 @@ function buildFallback(input: FollowupSummaryInput): {
     followup_patch: {
       summary_bullets: summaryBullets,
       doctor_questions: doctorQuestions,
-      materials_to_bring: input.followupDocuments?.map((doc) => doc.title) ?? []
+      materials_to_bring: confirmedDocuments.map((doc) => (doc.summary ? `${doc.title}：${doc.summary}` : doc.title))
     },
     tried_strategies: input.memoryItems
       .filter((item) => item.type === "effective_strategy" && item.status === "confirmed")
@@ -137,97 +145,52 @@ export async function generateFollowupSummaryLocal(
   input: FollowupSummaryInput
 ): Promise<FollowupSummaryResponse> {
   const startedAt = Date.now();
-  let parsed: LocalFollowupJson | null = null;
   let filename = "unknown";
-  let outputChars = 0;
-  let inputChars = 0;
-  let errorKind: string | undefined;
+  const provenance: InferenceProvenance = {
+    source: "rule_local_fallback",
+    task: "follow_up_summary",
+    modelId: filename,
+    backend: "unknown",
+    latencyMs: 0,
+    engineInitialized: false,
+    nativeGenerateAttempted: false,
+    nativeGenerateReturned: false,
+    rawOutputLength: 0,
+    rawOutputHash: null,
+    parseSucceeded: false,
+    fallbackReason: "cloud_summary_consent_missing_or_local_short_summary"
+  };
+  provenance.latencyMs = Date.now() - startedAt;
 
-  try {
-    filename = await ensureEngine();
-    const xmlMode = isXmlOutput();
-    const prompt = xmlMode
-      ? buildFollowupXmlPrompt({
-          dateRange: input.dateRange,
-          recordCount: input.recordCount,
-          attentionItems: input.attentionItems,
-          memoryItems: input.memoryItems,
-          followupDocuments: input.followupDocuments ?? []
-        })
-      : buildFollowupPrompt({
-          dateRange: input.dateRange,
-          recordCount: input.recordCount,
-          attentionItems: input.attentionItems,
-          memoryItems: input.memoryItems,
-          followupDocuments: input.followupDocuments ?? []
-        });
-    inputChars = prompt.length;
-    const result = await Gemma.generate(prompt, {
-      filename,
-      maxTokens: DEFAULT_MAX_TOKENS,
-      temperature: DEFAULT_TEMPERATURE,
-      topK: DEFAULT_TOP_K
-    });
-    outputChars = result.text.length;
-
-    if (xmlMode) {
-      const xml = parseFollowupXml(result.text);
-      parsed = xml ? xmlFollowupToJsonShape(xml) : null;
-    } else {
-      parsed = parseJsonObject<LocalFollowupJson>(result.text);
-    }
-    if (!parsed) errorKind = `${LOCAL_OUTPUT_FORMAT}_parse_failed`;
-  } catch (error) {
-    console.warn("[local] generateFollowupSummary Gemma failure, falling back", error);
-    errorKind = error instanceof Error ? error.message.slice(0, 60) : "engine_error";
-  }
+  console.log(
+    `[local] followup provenance source=${provenance.source} model=${provenance.modelId} backend=${provenance.backend} nativeAttempted=${provenance.nativeGenerateAttempted} nativeReturned=${provenance.nativeGenerateReturned} parse=${provenance.parseSucceeded} rawLen=${provenance.rawOutputLength} rawHash=${provenance.rawOutputHash ?? "none"} latencyMs=${provenance.latencyMs}`
+  );
 
   void reportOnDeviceInference({
     task: "followup",
     modelId: filename,
-    success: parsed !== null,
+    success: false,
     elapsedMs: Date.now() - startedAt,
-    inputChars,
-    outputChars,
-    fellBack: parsed === null,
-    errorKind
+    inputChars: 0,
+    outputChars: 0,
+    fellBack: true,
+    errorKind: provenance.fallbackReason ?? undefined,
+    source: provenance.source,
+    backend: provenance.backend,
+    rawOutputHash: provenance.rawOutputHash
   });
 
   const fallback = buildFallback(input);
 
-  const metrics: ReportMetricV2[] = Array.isArray(parsed?.metrics) && parsed!.metrics!.length > 0
-    ? parsed!.metrics!.map((m) => ({
-        label: coerceString(m.label, "指标"),
-        value: coerceString(m.value, "0"),
-        helper: coerceString(m.helper, ""),
-        tone: (["brand", "watch", "alert", "info"] as const).includes(
-          m.tone as "brand" | "watch" | "alert" | "info"
-        )
-          ? (m.tone as ReportMetricV2["tone"])
-          : "info"
-      }))
-    : fallback.metrics;
+  const metrics: ReportMetricV2[] = fallback.metrics;
 
-  const followupPatch = parsed?.followup_patch
-    ? {
-        summary_bullets: coerceStringArray(parsed.followup_patch.summary_bullets).length > 0
-          ? coerceStringArray(parsed.followup_patch.summary_bullets)
-          : fallback.followup_patch!.summary_bullets!,
-        doctor_questions: coerceStringArray(parsed.followup_patch.doctor_questions).length > 0
-          ? coerceStringArray(parsed.followup_patch.doctor_questions)
-          : fallback.followup_patch!.doctor_questions!,
-        materials_to_bring: coerceStringArray(parsed.followup_patch.materials_to_bring).length > 0
-          ? coerceStringArray(parsed.followup_patch.materials_to_bring)
-          : fallback.followup_patch!.materials_to_bring!
-      }
-    : {
-        summary_bullets: fallback.followup_patch!.summary_bullets!,
-        doctor_questions: fallback.followup_patch!.doctor_questions!,
-        materials_to_bring: fallback.followup_patch!.materials_to_bring!
-      };
+  const followupPatch = {
+    summary_bullets: fallback.followup_patch!.summary_bullets!,
+    doctor_questions: fallback.followup_patch!.doctor_questions!,
+    materials_to_bring: fallback.followup_patch!.materials_to_bring!
+  };
 
-  const triedStrategies = coerceStringArray(parsed?.tried_strategies);
-  const finalTriedStrategies = triedStrategies.length > 0 ? triedStrategies : fallback.tried_strategies;
+  const finalTriedStrategies = fallback.tried_strategies;
   const unreadable = unreadableDocuments(input);
 
   return {
@@ -241,7 +204,7 @@ export async function generateFollowupSummaryLocal(
     metrics,
     followup_patch: followupPatch,
     tried_strategies: finalTriedStrategies,
-    boundary_notice: coerceString(parsed?.boundary_notice, fallback.boundary_notice),
+    boundary_notice: fallback.boundary_notice,
     summary_zh: localSummaryZh(input, followupPatch, finalTriedStrategies, unreadable),
     english_key_phrases: [],
     source_window_days: sourceWindowDays(input.dateRange),
@@ -259,6 +222,7 @@ export async function generateFollowupSummaryLocal(
       confirmed_document_count: (input.followupDocuments ?? []).filter((doc) => doc.status === "reviewed").length,
       local_summary: true
     },
+    inference_provenance: provenance,
     error: null
   };
 }
