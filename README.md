@@ -12,9 +12,9 @@
 
 | 运行形态 | 当前状态 | 验证重点 |
 |---|---|---|
-| Android 端侧隐私模式 | 已支持 Gemma LiteRT 端侧演示 | 敏感文字记录可优先在本机处理 |
+| Android Track C 离线模式 | 已接入 Gemma 4 E2B `.litertlm` + LiteRT-LM Android；E4B 走同一 readiness contract | 飞行模式、本地 smoke test、`native_litertlm_success` provenance |
 | iPhone 云端 Agent 版 | 已支持完整 App 与云端 Agent 工作流 | 智能记录、今日照护、资料上传和复诊准备 |
-| iPhone 端侧隐私模式 | 已部署首版 Swift Native Bridge + llama.cpp | GGUF 模型下载、校验、删除和端侧 XML 输出 |
+| iPhone 端侧实验路径 | 已保留 Swift Native Bridge，可用于 LiteRT-LM preview / GGUF fallback 验证 | 本地模型生命周期、端侧解析和真机性能继续压测 |
 | 云端 Agent 后端 | 已部署到 Google Cloud Run | 照护工作流、复诊摘要、资料上传和模型目录 |
 
 > **安全边界**
@@ -42,7 +42,7 @@ CareMind 做的是一条家庭照护闭环：
 | 今日照护 | 今天值得留意的事、行动三态、陪伴活动和照护者支持 |
 | 智能记录 | 输入或语音记录照护事件，生成结构化日志、家庭观察信号和沟通话术 |
 | 复诊准备 | 聚合近 7 天 / 30 天记录、病历/检查/用药资料，生成可复制复诊摘要 |
-| 隐私模式 | 端侧模型就绪时，优先使用本机模型处理敏感文字记录 |
+| 隐私模式 / Track C 离线验证 | 下载或导入 Gemma 4 本地模型，完成 validation、runtime init、smoke test 后再运行离线工作流 |
 
 CareMind 的重点不是“AI 总结文本”，而是让照护者在混乱和疲惫时，知道今天先做什么、复诊该说什么，也知道哪些信息应该先留在自己手机里。
 
@@ -63,8 +63,8 @@ CareMind 的重点不是“AI 总结文本”，而是让照护者在混乱和�
 | 入口 | 适合查看 | 重点 |
 |---|---|---|
 | 演示视频 | 快速了解产品故事和完整闭环 | 从家庭照护记录到今日行动、沟通话术、复诊准备 |
-| Android 端侧演示 | 验证 C 赛道 Edge AI 能力 | Gemma LiteRT 本机处理敏感文字记录 |
-| iPhone 端侧演示 | 验证 iOS 隐私模式首版 | GGUF 模型下载、校验和 llama.cpp 本机 XML 输出 |
+| Android Track C 端侧演示 | 验证 C 赛道 Edge AI 能力 | Gemma 4 E2B/E4B + LiteRT-LM 本机推理，rule fallback 不能冒充成功 |
+| iPhone 端侧演示 | 验证 iOS 隐私模式实验路径 | Swift Native Bridge、本地模型生命周期和端侧解析 |
 | iPhone 云端版 | 验证完整 App 体验 | 智能记录、今日照护、复诊准备、资料上传和录音转写 |
 
 Android 端侧路径：
@@ -73,10 +73,12 @@ Android 端侧路径：
 Android App
 -> 设置 / 隐私模式
 -> 刷新模型目录
--> 下载 Gemma LiteRT 模型
--> 关闭 Wi-Fi 和移动网络
+-> 下载或导入 Gemma 4 E2B .litertlm 模型
+-> 运行本地 Gemma smoke test
+-> 开启飞行模式或关闭 Wi-Fi / 移动网络
+-> 运行 Track C 离线验证
 -> 输入敏感照护记录
--> 本机生成非诊断性照护理解与建议
+-> 结果必须显示 source=native_litertlm_success、nativeGenerateReturned=true、rawOutputHash=...
 ```
 
 iPhone 云端版路径：
@@ -92,10 +94,12 @@ iPhone 端侧路径：
 ```text
 iPhone App
 -> 设置 / 隐私模式
--> 下载 Gemma 3 1B GGUF 模型
+-> 下载或导入本地模型
 -> 输入敏感照护记录
--> llama.cpp 本机生成非诊断性 XML 输出
+-> Swift Native Bridge 验证本地模型生命周期和端侧解析
 ```
+
+当前比赛主验收路径以 Android 真机 Track C 离线模式为准。iPhone 端侧路径保留为跨平台工程验证，不把未完成真机压测的结果写成本次 Track C 主成绩。
 
 ## 4. 项目仓库链接
 
@@ -181,6 +185,13 @@ EXPO_PUBLIC_CAREMIND_API_URL=https://caremind-1039168666325.us-west1.run.app \
 ./gradlew :app:assembleRelease
 ```
 
+Track C 本地模型要求：
+
+- APK / AAB 不内置模型权重。
+- Release 包通过 Cloud Run 模型目录获取下载信息；Debug 构建可优先导入 `/data/local/tmp/llm/gemma.litertlm`。
+- 模型只有在文件存在、可读、大小/扩展名/哈希校验通过、LiteRT-LM runtime 初始化成功、本地 smoke test 返回非空 native output 后，状态才会变成 `ready`。
+- 如果结果是 `rule_local_fallback`、`manual_draft` 或 `unavailable`，只能说明本地安全兜底工作正常，不能作为 Gemma 4 本地推理成功证据。
+
 USB 调试本地后端：
 
 ```bash
@@ -219,12 +230,12 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 |---|---|
 | 前端 | Expo SDK 52, React Native 0.76, Expo Router, TypeScript |
 | 前端 UI | React Native Components, lucide-react-native, expo-blur, expo-haptics, expo-linear-gradient |
-| Android 端侧 | Kotlin Native Module, MediaPipe GenAI runtime, Gemma LiteRT `.litertlm` / `.task` |
-| iOS 端侧 | Expo Swift Native Module, iOS Model Store, llama.cpp GGUF local engine, CPU / Accelerate runtime |
+| Android 端侧 | Kotlin Native Module, LiteRT-LM Android `com.google.ai.edge.litertlm:litertlm-android:0.13.1`, Gemma 4 `.litertlm` |
+| iOS 端侧 | Expo Swift Native Module, iOS Model Store, LiteRT-LM preview / llama.cpp GGUF fallback, CPU / Accelerate runtime |
 | 后端 | FastAPI, Uvicorn, Python 3.12 |
 | Agent | Google ADK Agent, OpenAI-compatible model adapter, Cloudflare AI Gateway |
 | Memory | JSON-backed Memory Store, Memory Router, Memory Policy, Memory Tools |
-| 模型分发 | Google Cloud Storage 动态模型目录, `/api/models`, `/api/models/{filename}` |
+| 模型分发 | Google Cloud Storage 动态模型目录, `/api/models`, signed URL / direct download, app-private model storage |
 | 部署 | Google Cloud Run, Docker |
 
 ## 7. Agent 与系统架构
@@ -234,12 +245,12 @@ CAREMIND_GCS_MODEL_DELIVERY=redirect
 ```mermaid
 flowchart TD
     A["Expo / React Native App"] --> B["Inference Router"]
-    B --> C["Android 端侧隐私模式"]
-    C --> D["Gemma LiteRT 原生模块"]
+    B --> C["Android Track C 离线模式"]
+    C --> D["LiteRT-LM Android 原生模块"]
     D --> E["本地结构化解析"]
-    B --> N["iPhone 云端版 / 端侧隐私模式"]
+    B --> N["iPhone 云端版 / 端侧实验路径"]
     N --> O["Swift Native Module"]
-    O --> P["llama.cpp GGUF Runtime"]
+    O --> P["LiteRT-LM preview / GGUF fallback"]
     P --> E
     B --> F["云端 Agent 模式"]
     F --> G["FastAPI 业务 API"]
@@ -299,28 +310,34 @@ GET  /api/models/{filename}
 POST /v1/chat/completions
 ```
 
-### 7.3 模型使用说明
+### 7.3 Track C 端侧模型与验证
 
 | 场景 | 模型 / 路径 | 状态 | 作用 |
 |---|---|---|---|
-| Android 端侧隐私模式 | Gemma 3 1B LiteRT `.litertlm` | 可演示 | 敏感照护记录本地理解与建议生成 |
-| Android 端侧更大候选 | Gemma 4 E2B / E4B LiteRT | 已支持路径 / 实验性 | 通过动态模型目录支持，真机稳定性取决于设备内存 |
+| Track C Android 主验收路径 | Gemma 4 E2B `.litertlm` + LiteRT-LM Android | 已接入，readiness-gated | 智能记录、简单话术、危机/医疗边界、本地短复诊摘要 |
+| Track C 更大候选 | Gemma 4 E4B `.litertlm` + 同一 runtime contract | 路由与校验路径已预留 | 适合更高内存设备继续压测 |
+| 本地规则安全兜底 | deterministic guardrail / parser / fallback builders | 已完成 | 模型未就绪、JSON 解析失败、医疗越界或危机表达时保证安全，但不计为 native Gemma 成功 |
 | iPhone / iOS 云端版 | Cloud Run Agent workflow | 已支持 | 完整 App 体验、资料上传、录音上传转写 |
-| iPhone / iOS 端侧隐私模式 | Swift Native Module + llama.cpp GGUF runtime | 已部署首版 / 继续性能压测 | 模型生命周期、下载校验、端侧 XML 输出和本地推理入口 |
-| 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 完整工作流、摘要、工具调用 |
-| 稳定性兜底 | deterministic parser / fallback builders | 已完成 | 保证 Demo 不因小模型输出不完整而中断 |
+| iPhone / iOS 端侧实验路径 | Swift Native Module + LiteRT-LM preview / GGUF fallback | 已保留 / 继续性能压测 | 跨平台模型生命周期、端侧解析和本地推理入口验证 |
+| 云端 Agent 工作流 | OpenAI-compatible / Gemma-family endpoint | 已完成 | 非 Track C judged path，用于完整产品和 hybrid 模式 |
 
-当前真机端侧演示默认使用 Android Gemma 3 1B LiteRT；iPhone 端侧默认使用 Gemma 3 1B GGUF + llama.cpp CPU / Accelerate runtime。Gemma 4 E2B/E4B 是动态模型目录中预留的更大候选模型，不作为普通手机默认稳定模型承诺；iOS Metal 加速和更大模型作为后续优化方向继续压测。
+Track C 离线验证必须同时满足：
+
+- 飞行模式或网络关闭状态下运行。
+- 选中的模型状态为 `ready`，且 smoke test 通过。
+- `nativeGenerateAttempted=true`、`nativeGenerateReturned=true`、`rawOutputLength > 0`、`rawOutputHash` 存在。
+- 普通智能记录结果为 `source=native_litertlm_success`，或 native 有输出但结构化解析失败时明确标成 `native_litertlm_parse_fallback`。
+- 如果普通任务只得到 `rule_local_fallback`，离线验证必须失败，并提示“本地 Gemma 模型没有运行”。
 
 ## 8. 项目亮点
 
 | 亮点 | 说明 |
 |---|---|
 | 失智症家庭照护专用 Agent | 围绕照护日志、今日关注、沟通话术、复诊摘要和照护者压力支持组织输出 |
-| Edge AI 来自真实隐私需求 | Android 与 iPhone 隐私模式都让敏感文字记录可以优先在本机完成初步理解 |
+| Edge AI 来自真实隐私需求 | Track C 主链路在 Android 真机飞行模式下运行 Gemma 4，本地结果带 provenance 和 raw output hash |
 | 云端多 Agent + Memory 工作流 | 6 个显式 ADK Agent 负责事件结构化、非诊断性关注提示、照护者支持、行动计划和复诊摘要 |
 | 完整前端 UI 已提交 | `frontend/app` 和 `frontend/components` 包含今日照护、智能记录、复诊准备、设置页、资料上传和隐私模式 UI |
-| Android 与 iPhone 路线都保留 | Android 用于 C 赛道端侧硬件演示；iPhone 端同时支持云端 Agent 与 llama.cpp 端侧隐私模式 |
+| Android 与 iPhone 路线都保留 | Android 用于 C 赛道端侧硬件演示；iPhone 端保留 Swift Native Bridge 作为跨平台端侧实验路径 |
 | 医疗边界前置 | 不诊断、不处方、不判断检查；复诊摘要和资料进入报告前需要家属确认 |
 
 ## 9. 交付物说明
@@ -340,6 +357,8 @@ POST /v1/chat/completions
 | 本地 / 云端推理路由 | `frontend/lib/inference` |
 | Demo 分镜 | `docs/demo-video/demo_storyboard.md` |
 | 录制指南 | `docs/demo-video/recording_guide.md` |
+| Track C 性能证据模板 | `docs/TRACK_C_EDGE_AI_PERFORMANCE_EVIDENCE.md` |
+| Track C edge case 设计 | `docs/TRACK_C_EDGE_CASE_FLASH_DESIGN.md` |
 
 ## 目录结构
 

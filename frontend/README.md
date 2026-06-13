@@ -25,8 +25,8 @@ CareMind 前端 MVP，基于 `CareMind_Frontend_Design_v0.2.md` 实现。
 - 设置页核心事件审计
 - 医疗边界前置提示文案
 - iPhone 云端版：支持完整 App、云端 Agent 工作流、资料上传与录音上传转写
-- iPhone 端侧隐私模式：已接入 Swift Native Module + llama.cpp，本地 GGUF 模型支持下载、校验、删除和端侧 XML 输出
-- Android 隐私模式：支持 Gemma LiteRT 端侧模型演示
+- iPhone 端侧实验路径：已保留 Swift Native Module，可验证 LiteRT-LM preview / GGUF fallback 的模型生命周期和端侧解析
+- Android Track C 离线模式：支持 Gemma 4 E2B `.litertlm` + LiteRT-LM Android，只有 readiness + smoke test 通过才算本地模型就绪
 
 ## 运行方式
 
@@ -65,7 +65,7 @@ iPhone 端当前支持完整 CareMind App 与云端 Agent 工作流：
 - 录音上传转写
 - 沟通话术与照护建议
 
-边界说明：iPhone 端默认仍可走已部署的 Cloud Run 后端；开启隐私模式且 GGUF 模型就绪时，会通过 iOS Native Bridge 调用本地 llama.cpp runtime。当前 iOS runtime 为 CPU / Accelerate 路径，Metal 加速和更大模型需要继续做真机性能测试。
+边界说明：iPhone 端默认仍可走已部署的 Cloud Run 后端；端侧路径通过 iOS Native Bridge 验证本地模型生命周期、LiteRT-LM preview / GGUF fallback 和端侧解析。当前比赛主验收路径仍以 Android 真机 Track C 离线模式为准，iOS 端侧结果不写成本次 Track C 主成绩。
 
 本地 iOS 模拟器运行：
 
@@ -93,17 +93,17 @@ eas build -p ios --profile preview
 eas build -p ios --profile ios-simulator
 ```
 
-#### iPhone 端侧隐私模式
+#### iPhone 端侧实验路径
 
-iPhone 用户同样需要隐私优先能力。当前代码里的 `modules/caremind-ios-gemma` 是一个 Expo Swift Native Module，负责模型下载、校验、删除、llama.cpp 推理和运行时信息返回，并复用现有 `inference-router`、XML 输出约束和 fallback builders：
+iPhone 用户同样需要隐私优先能力。当前代码里的 `modules/caremind-ios-gemma` 是一个 Expo Swift Native Module，负责模型下载、校验、删除、LiteRT-LM preview / GGUF fallback 调用和运行时信息返回，并复用现有 `inference-router`、结构化输出约束和 fallback builders：
 
 ```text
 iPhone App
 -> Inference Router
 -> iOS Local Inference Adapter
 -> Swift Native Module
--> llama.cpp GGUF runtime
--> XML parser / guardrail / fallback
+-> LiteRT-LM preview / GGUF fallback runtime
+-> parser / guardrail / fallback
 -> 本地照护整理
 ```
 
@@ -130,6 +130,20 @@ EXPO_PUBLIC_CAREMIND_API_URL=http://127.0.0.1:8090 npm run web
 adb reverse tcp:8090 tcp:8090
 npm run android:usb
 ```
+
+### Android Track C 离线模式
+
+Android Track C judged path 使用 Gemma 4 E2B `.litertlm` + LiteRT-LM Android：
+
+```text
+设置 / 隐私模式
+-> 下载或导入 Gemma 4 E2B .litertlm
+-> validation / runtime init / smoke test
+-> 飞行模式运行 Track C 离线验证
+-> 智能记录结果显示 source=native_litertlm_success
+```
+
+模型只有在文件存在、可读、大小/扩展名/哈希校验通过、LiteRT-LM runtime 初始化成功、本地 smoke test 返回非空 native output 后，状态才会变成 `ready`。如果结果是 `rule_local_fallback`、`manual_draft` 或 `unavailable`，它只能说明本地安全兜底可用，不能作为 Gemma 4 本地推理成功证据。
 
 正式移动端安装包不应该绑定 `127.0.0.1`。发布前需要把已部署的 HTTPS 后端写入构建环境：
 
